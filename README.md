@@ -1,4 +1,4 @@
-# doc-agent-oci
+# ai-document-analyzer
 
 Aplicacion full-stack con setup guiado para conectar Oracle Autonomous Database y servicios OCI desde el wizard inicial.
 
@@ -14,13 +14,13 @@ Ejemplo de arranque:
 
 ```bash
 docker run -d \
-  --name doc-agent-oci \
+  --name ai-document-analyzer \
   -p 8080:80 \
-  -v doc_agent_data:/app/apps/backend/data \
-  -v doc_agent_wallet:/app/apps/backend/wallet \
-  -v doc_agent_keys:/app/apps/backend/keys \
-  -v doc_agent_logs:/app/apps/backend/logs \
-  ghcr.io/<owner>/doc-agent-oci:v0.1.0
+  -v ai_document_analyzer_data:/app/apps/backend/data \
+  -v ai_document_analyzer_wallet:/app/apps/backend/wallet \
+  -v ai_document_analyzer_keys:/app/apps/backend/keys \
+  -v ai_document_analyzer_logs:/app/apps/backend/logs \
+  ghcr.io/<owner>/ai-document-analyzer:v0.1.0
 ```
 
 Luego abre `http://localhost:8080` o la IP publica de tu VM en OCI.
@@ -53,17 +53,17 @@ La imagen publica no incluye credenciales, wallet ni datos reales.
 ### Actualizar a una nueva version
 
 ```bash
-docker pull ghcr.io/<owner>/doc-agent-oci:v0.1.0
-docker stop doc-agent-oci
-docker rm doc-agent-oci
+docker pull ghcr.io/<owner>/ai-document-analyzer:v0.1.0
+docker stop ai-document-analyzer
+docker rm ai-document-analyzer
 docker run -d \
-  --name doc-agent-oci \
+  --name ai-document-analyzer \
   -p 8080:80 \
-  -v doc_agent_data:/app/apps/backend/data \
-  -v doc_agent_wallet:/app/apps/backend/wallet \
-  -v doc_agent_keys:/app/apps/backend/keys \
-  -v doc_agent_logs:/app/apps/backend/logs \
-  ghcr.io/<owner>/doc-agent-oci:v0.1.0
+  -v ai_document_analyzer_data:/app/apps/backend/data \
+  -v ai_document_analyzer_wallet:/app/apps/backend/wallet \
+  -v ai_document_analyzer_keys:/app/apps/backend/keys \
+  -v ai_document_analyzer_logs:/app/apps/backend/logs \
+  ghcr.io/<owner>/ai-document-analyzer:v0.1.0
 ```
 
 ## Desarrollo local
@@ -78,7 +78,7 @@ Proyecto listo para ejecutarse desde la raiz del workspace.
 
 ### Levantar el proyecto
 
-Ejecuta desde `d:\dev\doc_agent`:
+Ejecuta desde la raiz del repositorio:
 
 ```powershell
 .\scripts\dev.ps1
@@ -97,7 +97,7 @@ La tarea del backend usa un runner de desarrollo que limita el `reload` a codigo
 
 En Cursor:
 
-1. Abre la carpeta raiz `D:\dev\doc_agent`
+1. Abre la carpeta raiz del repositorio
 2. Presiona `Ctrl+Shift+P`
 3. Escribe `Tasks: Run Task`
 4. Presiona Enter

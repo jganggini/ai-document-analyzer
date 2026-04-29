@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 env:
-  IMAGE_NAME: doc-agent-oci
+  IMAGE_NAME: ai-document-analyzer
 
 jobs:
   publish:
