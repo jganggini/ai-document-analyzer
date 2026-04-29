@@ -1,0 +1,520 @@
+"""Agent graph nodes."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import date
+from time import perf_counter
+from typing import TYPE_CHECKING, Any
+
+from apps.backend.app.agent.contracts import LLMResult
+from apps.backend.app.agent.router import GraphIntentRouter, GraphSearchResponder
+from apps.backend.app.agent.state import QAGraphState
+from apps.backend.app.agent.tools.hybrid_answer_tool import HybridAnswerResult, HybridAnswerTool
+from apps.backend.app.agent.tools.multimodal_tool import PageVisionTool, VisualInspectionResult
+from apps.backend.app.agent.tools.oracle_retrieval_tool import OracleRetrievalTool
+from apps.backend.app.rag.facts_query_service import QuestionFactResolver
+from apps.backend.app.rag.question_classifier import QuestionClassifier
+from apps.backend.app.rag.scope_resolver import QuestionScopeResolver
+from apps.backend.app.repositories.file_repository import FileRepository
+
+if TYPE_CHECKING:
+    from apps.backend.app.agent.agents import AnalysisAgent, SupervisorAgent
+
+
+def _empty_visual_result() -> VisualInspectionResult:
+    return VisualInspectionResult(
+        used=False,
+        analyzed_pages=[],
+        visual_context="",
+        confidence_notes=[],
+        ocr_vs_visual_discrepancies=[],
+    )
+
+
+def _merge_node_timing(state: QAGraphState, *, node_key: str, started_at: float) -> dict[str, int]:
+    timings = {
+        str(key): int(value)
+        for key, value in dict(state.get("node_timings_ms") or {}).items()
+    }
+    timings[node_key] = max(0, int((perf_counter() - started_at) * 1000))
+    return timings
+
+
+@dataclass(slots=True)
+class QAGraphNodes:
+    intent_router: GraphIntentRouter
+    casual_responder: GraphSearchResponder
+    supervisor: SupervisorAgent
+    scope_resolver: QuestionScopeResolver
+    question_classifier: QuestionClassifier
+    fact_resolver: QuestionFactResolver
+    retrieval_tool: OracleRetrievalTool
+    analysis_agent: AnalysisAgent
+    hybrid_answer_tool: HybridAnswerTool
+    page_vision_tool: PageVisionTool
+    repository: FileRepository
+
+    @staticmethod
+    def _build_conversation_scoped_question(*, question: str, archive_slugs: list[str]) -> str:
+        safe_question = str(question or "").strip()
+        safe_archive_slugs = [str(item).strip() for item in list(archive_slugs or []) if str(item).strip()]
+        if not safe_archive_slugs:
+            return safe_question
+        rendered_scope = ", ".join(safe_archive_slugs[:24])
+        if len(safe_archive_slugs) > 24:
+            rendered_scope += ", ..."
+        return (
+            f"{safe_question}\n\n"
+            f"Scoped archives inherited from the previous turn: {rendered_scope}."
+        )
+
+    def classify_intent(self, state: QAGraphState) -> dict[str, Any]:
+        started_at = perf_counter()
+        has_explicit_selector_scope = bool(
+            state.get("metadata_mode") == "metadata_first"
+            or list(state.get("requested_archive_slugs") or [])
+            or list(state.get("requested_metadata_fields") or [])
+        )
+        route = "document" if has_explicit_selector_scope else self.intent_router.classify(
+            question=state["question"],
+            file_ids=list(state.get("requested_file_ids") or state.get("file_ids") or []),
+            chat_history=list(state.get("chat_history") or []),
+        )
+        return {
+            "route": route,
+            "node_timings_ms": _merge_node_timing(state, node_key="classify_intent", started_at=started_at),
+        }
+
+    def search_response(self, state: QAGraphState) -> dict[str, Any]:
+        started_at = perf_counter()
+        answer = self.casual_responder.respond(
+            question=state["question"],
+            chat_history=list(state.get("chat_history") or []),
+        )
+        return {
+            "strategy": "search",
+            "selected_provider": "supervisor-search",
+            "evidence": [],
+            "answer": answer,
+            "answer_mode": "small_talk",
+            "visual_confirmation_used": False,
+            "analyzed_pages": [],
+            "confidence_notes": ["Ruta Supervisor: SEARCH."],
+            "ocr_vs_visual_discrepancies": [],
+            "visual_result": _empty_visual_result(),
+            "question_class": "search",
+            "question_class_rationale": "casual-search-route",
+            "scope_archive_slugs": [],
+            "doc_shortlist_count": 0,
+            "text_candidates_count": 0,
+            "image_candidates_count": 0,
+            "page_text_count": 0,
+            "page_image_count": 0,
+            "oracle_text_count": 0,
+            "fused_pages_count": 0,
+            "rerank_count": 0,
+            "metadata_prefilter_count": 0,
+            "metadata_prefilter_ms": 0,
+            "metadata_prefilter_applied": False,
+            "query_embedding_ms": 0,
+            "doc_search_ms": 0,
+            "page_search_ms": 0,
+            "rerank_ms": 0,
+            "retrieval_total_ms": 0,
+            "image_retrieval_enabled": False,
+            "retrieval_route": "search",
+            "visual_checks_count": 0,
+            "facts_used_count": 0,
+            "metadata_phase_used": False,
+            "document_phase_used": False,
+            "resolved_archive_slugs": [],
+            "resolved_metadata_fields": [],
+            "metadata_only_reason": "",
+            "evidence_recall_proxy": 0.0,
+            "node_timings_ms": _merge_node_timing(state, node_key="search_response", started_at=started_at),
+        }
+
+    def resolve_scope(self, state: QAGraphState) -> dict[str, Any]:
+        started_at = perf_counter()
+        original_question = str(state.get("original_question") or state["question"])
+        resolution = self.scope_resolver.resolve(
+            question=original_question,
+            user_id=int(state.get("user_id") or 0),
+            file_ids=list(state.get("requested_file_ids") or state.get("file_ids") or []),
+            archive_slugs=list(state.get("requested_archive_slugs") or []),
+            allow_inferred_scope=bool(state.get("allow_inferred_scope", True)),
+            conversation_file_ids=list(state.get("conversation_scope_file_ids") or []),
+            conversation_archive_slugs=list(state.get("conversation_scope_archive_slugs") or []),
+        )
+        resolved_file_ids = list(resolution.file_ids)
+        conversation_scope_applied = str(resolution.scope_origin or "") == "conversation"
+        effective_question = original_question
+        if conversation_scope_applied and resolution.scope_archive_slugs:
+            effective_question = self._build_conversation_scoped_question(
+                question=original_question,
+                archive_slugs=list(resolution.scope_archive_slugs),
+            )
+        return {
+            "file_ids": resolved_file_ids,
+            "effective_question": effective_question,
+            "scope_origin": resolution.scope_origin,
+            "scope_document_codes": list(resolution.scope_document_codes),
+            "scope_archive_slugs": list(resolution.scope_archive_slugs),
+            "resolved_scope_file_count": int(resolution.resolved_scope_file_count),
+            "scope_resolution_ms": int(resolution.scope_resolution_ms),
+            "ignored_inferred_scope": bool(resolution.ignored_inferred_scope),
+            "conversation_scope_applied": conversation_scope_applied,
+            "resolved_archive_slugs": list(resolution.scope_archive_slugs or state.get("resolved_archive_slugs") or []),
+            "selected_docs_count": len(resolved_file_ids),
+            "node_timings_ms": _merge_node_timing(state, node_key="resolve_scope", started_at=started_at),
+        }
+
+    def classify_question(self, state: QAGraphState) -> dict[str, Any]:
+        started_at = perf_counter()
+        classification = self.question_classifier.classify(
+            question=str(state.get("original_question") or state["question"]),
+        )
+        return {
+            "question_class": classification.question_class,
+            "question_class_rationale": classification.rationale,
+            "node_timings_ms": _merge_node_timing(state, node_key="classify_question", started_at=started_at),
+        }
+
+    def resolve_facts(self, state: QAGraphState) -> dict[str, Any]:
+        started_at = perf_counter()
+        current_date = state.get("current_date")
+        if current_date is not None and not isinstance(current_date, date):
+            current_date = None
+        prior_file_ids = [int(file_id) for file_id in list(state.get("file_ids") or []) if int(file_id) > 0]
+        resolution = self.fact_resolver.resolve(
+            question_class=str(state.get("question_class") or "extractive"),
+            question=str(state.get("original_question") or state["question"]),
+            user_id=int(state.get("user_id") or 0),
+            file_ids=prior_file_ids,
+            metadata_mode=str(state.get("metadata_mode") or "auto"),
+            archive_slugs=list(state.get("requested_archive_slugs") or state.get("scope_archive_slugs") or []),
+            metadata_fields=list(
+                state.get("requested_metadata_fields")
+                or state.get("conversation_scope_metadata_fields")
+                or []
+            ),
+            reference_date=current_date,
+        )
+        resolved_file_ids = (
+            [int(file_id) for file_id in list(resolution.narrowed_file_ids) if int(file_id) > 0]
+            if resolution.narrowed_file_ids
+            else prior_file_ids
+        )
+        prior_notes = list(state.get("confidence_notes") or [])
+        merged_notes = prior_notes + [
+            note for note in resolution.confidence_notes if note not in prior_notes
+        ]
+        should_skip_retrieval = bool(resolution.answer_override) and not bool(
+            resolution.document_phase_required
+        )
+        resolved_strategy = str(state.get("strategy") or "").strip()
+        resolved_retrieval_route = str(state.get("retrieval_route") or "").strip()
+        if should_skip_retrieval:
+            resolved_strategy = "facts-first"
+            resolved_retrieval_route = str(resolution.metadata_only_reason or "facts-first")
+        return {
+            "file_ids": resolved_file_ids,
+            "selected_docs_count": len(resolved_file_ids),
+            "fact_context_text": resolution.fact_context_text,
+            "answer_override": resolution.answer_override,
+            "facts_used_count": int(resolution.facts_used_count),
+            "file_group_ids": [int(item) for item in list(resolution.file_group_ids or []) if int(item) > 0],
+            "metadata_phase_used": bool(resolution.metadata_phase_used),
+            "resolved_archive_slugs": list(
+                resolution.resolved_archive_slugs
+                or state.get("resolved_archive_slugs")
+                or state.get("scope_archive_slugs")
+                or []
+            ),
+            "resolved_metadata_fields": list(resolution.resolved_metadata_fields or []),
+            "metadata_only_reason": str(resolution.metadata_only_reason or ""),
+            "skip_retrieval": should_skip_retrieval,
+            "strategy": resolved_strategy,
+            "retrieval_route": resolved_retrieval_route,
+            "confidence_notes": merged_notes,
+            "node_timings_ms": _merge_node_timing(state, node_key="resolve_facts", started_at=started_at),
+        }
+
+    def retrieve_candidates(self, state: QAGraphState) -> dict[str, Any]:
+        started_at = perf_counter()
+        retrieval_question = str(state.get("effective_question") or state["question"]).strip()
+        plan = self.supervisor.create_plan(
+            question=retrieval_question,
+            requested_top_k=int(state["top_k"]),
+            question_class=str(state.get("question_class") or "extractive"),
+        )
+        retrieval_result = self.retrieval_tool.retrieve(
+            question=retrieval_question,
+            user_id=int(state.get("user_id") or 0),
+            file_ids=list(state.get("file_ids") or []),
+            archive_slugs=list(
+                state.get("resolved_archive_slugs")
+                or state.get("requested_archive_slugs")
+                or state.get("scope_archive_slugs")
+                or []
+            ),
+            top_k=plan.top_k,
+            candidate_k=int(state.get("candidate_k")) if state.get("candidate_k") is not None else None,
+            min_pages_per_selected_doc=max(0, int(state.get("min_pages_per_selected_doc") or 0)),
+            summary_mode=str(state.get("summary_mode") or "default"),
+            question_class=str(state.get("question_class") or "extractive"),
+            scope_origin=str(state.get("scope_origin") or "global"),
+        )
+        return {
+            "strategy": plan.strategy,
+            "selected_provider": plan.selected_provider,
+            "evidence": list(retrieval_result.evidence),
+            "scope_origin": str(
+                retrieval_result.telemetry.get("effective_scope_origin")
+                or state.get("scope_origin")
+                or "global"
+            ),
+            "doc_shortlist_count": int(retrieval_result.telemetry.get("doc_shortlist_count") or 0),
+            "text_candidates_count": int(retrieval_result.telemetry.get("text_candidates_count") or 0),
+            "image_candidates_count": int(retrieval_result.telemetry.get("image_candidates_count") or 0),
+            "page_text_count": int(retrieval_result.telemetry.get("page_text_count") or 0),
+            "page_image_count": int(retrieval_result.telemetry.get("page_image_count") or 0),
+            "oracle_text_count": int(retrieval_result.telemetry.get("oracle_text_count") or 0),
+            "fused_pages_count": int(retrieval_result.telemetry.get("fused_pages_count") or 0),
+            "rerank_count": int(retrieval_result.telemetry.get("rerank_count") or 0),
+            "metadata_prefilter_count": int(retrieval_result.telemetry.get("metadata_prefilter_count") or 0),
+            "metadata_prefilter_ms": int(retrieval_result.telemetry.get("metadata_prefilter_ms") or 0),
+            "metadata_prefilter_applied": bool(
+                retrieval_result.telemetry.get("metadata_prefilter_applied") or False
+            ),
+            "full_document_coverage_requested": bool(
+                retrieval_result.telemetry.get("full_document_coverage_requested") or False
+            ),
+            "full_document_page_limit": int(retrieval_result.telemetry.get("full_document_page_limit") or 0),
+            "query_embedding_ms": int(retrieval_result.telemetry.get("query_embedding_ms") or 0),
+            "doc_search_ms": int(retrieval_result.telemetry.get("doc_search_ms") or 0),
+            "page_search_ms": int(retrieval_result.telemetry.get("page_search_ms") or 0),
+            "rerank_ms": int(retrieval_result.telemetry.get("rerank_ms") or 0),
+            "retrieval_total_ms": int(retrieval_result.telemetry.get("retrieval_total_ms") or 0),
+            "image_retrieval_enabled": bool(
+                retrieval_result.telemetry.get("image_retrieval_enabled") or False
+            ),
+            "retrieval_route": str(retrieval_result.telemetry.get("retrieval_route") or "global_semantic"),
+            "evidence_recall_proxy": float(retrieval_result.telemetry.get("evidence_recall_proxy") or 0.0),
+            "document_phase_used": True,
+            "node_timings_ms": _merge_node_timing(state, node_key="retrieve_candidates", started_at=started_at),
+        }
+
+    def fuse_page_evidence(self, state: QAGraphState) -> dict[str, Any]:
+        started_at = perf_counter()
+        analyzed = self.analysis_agent.run(evidence=list(state.get("evidence") or []))
+        distinct_files = len({int(item.file_id) for item in analyzed if int(item.file_id) > 0})
+        scope_size = max(0, int(state.get("resolved_scope_file_count") or len(list(state.get("file_ids") or []))))
+        coverage_ratio = float(distinct_files / scope_size) if scope_size > 0 else 0.0
+        notes = list(state.get("confidence_notes") or [])
+        if analyzed:
+            notes.append(
+                f"Retrieval fusion: {len(analyzed)} pages in the shortlist, {distinct_files} distinct documents."
+            )
+        elif state.get("answer_override"):
+            notes.append("Facts resolver returned a deterministic answer without additional retrieval.")
+        return {
+            "evidence": analyzed,
+            "distinct_files_in_evidence": distinct_files,
+            "coverage_ratio": coverage_ratio,
+            "confidence_notes": notes,
+            "node_timings_ms": _merge_node_timing(state, node_key="fuse_page_evidence", started_at=started_at),
+        }
+
+    def maybe_verify_visual(self, state: QAGraphState) -> dict[str, Any]:
+        started_at = perf_counter()
+        visual_targets = [
+            item
+            for item in list(state.get("evidence") or [])
+            if bool(getattr(item, "needs_visual_check", False))
+        ]
+        if not visual_targets:
+            return {
+                "visual_result": _empty_visual_result(),
+                "visual_checks_count": 0,
+                "node_timings_ms": _merge_node_timing(state, node_key="maybe_verify_visual", started_at=started_at),
+            }
+        visual_result = self.page_vision_tool.analyze(
+            question=str(state.get("original_question") or state["question"]),
+            evidence=visual_targets,
+            require_visual=True,
+        )
+        return {
+            "visual_result": visual_result,
+            "visual_checks_count": len(list(visual_result.analyzed_pages or [])),
+            "node_timings_ms": _merge_node_timing(state, node_key="maybe_verify_visual", started_at=started_at),
+        }
+
+    def synthesize_document_answer(self, state: QAGraphState) -> dict[str, Any]:
+        started_at = perf_counter()
+        visual_result = state.get("visual_result")
+        if not isinstance(visual_result, VisualInspectionResult):
+            visual_result = _empty_visual_result()
+        hybrid_answer: HybridAnswerResult = self.hybrid_answer_tool.answer(
+            question=str(state.get("original_question") or state["question"]),
+            evidence=list(state.get("evidence") or []),
+            strategy=str(state.get("strategy") or "fast-grounded"),
+            visual_result=visual_result,
+            summary_mode=str(state.get("summary_mode") or "default"),
+            selected_docs_count=max(0, int(state.get("selected_docs_count") or len(list(state.get("file_ids") or [])))),
+            question_class=str(state.get("question_class") or "extractive"),
+            fact_context_text=str(state.get("fact_context_text") or ""),
+            answer_override=(str(state.get("answer_override") or "").strip() or None),
+        )
+        prior_notes = list(state.get("confidence_notes") or [])
+        merged_notes = prior_notes + [note for note in hybrid_answer.confidence_notes if note not in prior_notes]
+        return {
+            "hybrid_answer": hybrid_answer,
+            "answer": hybrid_answer.llm_result,
+            "answer_mode": hybrid_answer.answer_mode,
+            "visual_confirmation_used": hybrid_answer.visual_confirmation_used,
+            "analyzed_pages": hybrid_answer.analyzed_pages,
+            "confidence_notes": merged_notes,
+            "ocr_vs_visual_discrepancies": hybrid_answer.ocr_vs_visual_discrepancies,
+            "node_timings_ms": _merge_node_timing(state, node_key="synthesize_document_answer", started_at=started_at),
+        }
+
+    def persist_turn(self, state: QAGraphState) -> dict[str, Any]:
+        started_at = perf_counter()
+        answer = state.get("answer")
+        if answer is None:
+            return {}
+        question = state["question"]
+        raw_question = str(state.get("raw_question") or question)
+        file_ids = list(state.get("file_ids") or [])
+        requested_file_ids = list(state.get("requested_file_ids") or [])
+        evidence = list(state.get("evidence") or [])
+        all_sources = [
+            {
+                "source_number": int(item.source_number),
+                "file_id": int(item.file_id),
+                "file_name": str(item.file_name),
+                "page_number": int(item.page_number),
+                "object_name_page": str(item.object_name_page or ""),
+            }
+            for item in evidence
+        ]
+        selected_citations = sorted(
+            {int(value) for value in list(answer.citation_source_numbers or []) if int(value) > 0}
+        )
+        selected_citations_set = set(selected_citations)
+        cited_sources = [
+            source
+            for source in all_sources
+            if int(source.get("source_number") or 0) in selected_citations_set
+        ]
+        effective_sources = cited_sources if cited_sources else list(all_sources)
+        distinct_files = sorted({int(item.file_id) for item in evidence if int(item.file_id) > 0})
+        scope_file_ids = sorted({int(file_id) for file_id in file_ids if int(file_id) > 0})
+        scope_file_id = scope_file_ids[0] if len(scope_file_ids) == 1 else None
+        retrieval_metadata = {
+            "raw_question": raw_question,
+            "cleaned_question": question,
+            "requested_file_ids": requested_file_ids,
+            "metadata_mode": str(state.get("metadata_mode") or "auto"),
+            "requested_archive_slugs": list(state.get("requested_archive_slugs") or []),
+            "requested_metadata_fields": list(state.get("requested_metadata_fields") or []),
+            "scope_file_ids": scope_file_ids,
+            "scope_file_id": scope_file_id,
+            "scope_origin": str(state.get("scope_origin") or ""),
+            "scope_document_codes": list(state.get("scope_document_codes") or []),
+            "scope_archive_slugs": list(state.get("scope_archive_slugs") or []),
+            "resolved_archive_slugs": list(state.get("resolved_archive_slugs") or []),
+            "resolved_metadata_fields": list(state.get("resolved_metadata_fields") or []),
+            "metadata_phase_used": bool(state.get("metadata_phase_used") or False),
+            "document_phase_used": bool(state.get("document_phase_used") or False),
+            "metadata_only_reason": str(state.get("metadata_only_reason") or ""),
+            "conversation_scope_file_ids": [
+                int(item)
+                for item in list(state.get("conversation_scope_file_ids") or [])
+                if int(item) > 0
+            ],
+            "conversation_scope_archive_slugs": list(state.get("conversation_scope_archive_slugs") or []),
+            "conversation_scope_metadata_fields": list(
+                state.get("conversation_scope_metadata_fields") or []
+            ),
+            "conversation_scope_turn_index": int(state.get("conversation_scope_turn_index") or 0),
+            "conversation_scope_question_class": str(state.get("conversation_scope_question_class") or ""),
+            "conversation_scope_applied": bool(state.get("conversation_scope_applied") or False),
+            "resolved_scope_file_count": int(state.get("resolved_scope_file_count") or len(scope_file_ids)),
+            "scope_resolution_ms": int(state.get("scope_resolution_ms") or 0),
+            "ignored_inferred_scope": bool(state.get("ignored_inferred_scope") or False),
+            "question_class": str(state.get("question_class") or ""),
+            "question_class_rationale": str(state.get("question_class_rationale") or ""),
+            "facts_used_count": int(state.get("facts_used_count") or 0),
+            "file_group_ids": [int(item) for item in list(state.get("file_group_ids") or []) if int(item) > 0],
+            "fact_context_text": str(state.get("fact_context_text") or ""),
+            "answer_override_used": bool(state.get("answer_override") or False),
+            "current_date": (
+                state.get("current_date").isoformat()
+                if isinstance(state.get("current_date"), date)
+                else None
+            ),
+            "strategy": state.get("strategy") or "",
+            "selected_provider": state.get("selected_provider") or "",
+            "top_k": int(state.get("top_k") or 5),
+            "candidate_k": int(state.get("candidate_k") or 0),
+            "evidence_count": len(evidence),
+            "distinct_files_in_evidence": len(distinct_files),
+            "coverage_ratio": float(state.get("coverage_ratio") or 0.0),
+            "summary_mode": str(state.get("summary_mode") or "default"),
+            "selected_docs_count": int(state.get("selected_docs_count") or len(scope_file_ids)),
+            "answer_mode": state.get("answer_mode") or "",
+            "visual_confirmation_used": bool(state.get("visual_confirmation_used") or False),
+            "analyzed_pages": list(state.get("analyzed_pages") or []),
+            "confidence_notes": list(state.get("confidence_notes") or []),
+            "ocr_vs_visual_discrepancies": list(state.get("ocr_vs_visual_discrepancies") or []),
+            "graph_route": state.get("route") or "",
+            "doc_shortlist_count": int(state.get("doc_shortlist_count") or 0),
+            "text_candidates_count": int(state.get("text_candidates_count") or 0),
+            "image_candidates_count": int(state.get("image_candidates_count") or 0),
+            "page_text_count": int(state.get("page_text_count") or 0),
+            "page_image_count": int(state.get("page_image_count") or 0),
+            "oracle_text_count": int(state.get("oracle_text_count") or 0),
+            "fused_pages_count": int(state.get("fused_pages_count") or 0),
+            "rerank_count": int(state.get("rerank_count") or 0),
+            "metadata_prefilter_count": int(state.get("metadata_prefilter_count") or 0),
+            "metadata_prefilter_ms": int(state.get("metadata_prefilter_ms") or 0),
+            "metadata_prefilter_applied": bool(state.get("metadata_prefilter_applied") or False),
+            "full_document_coverage_requested": bool(state.get("full_document_coverage_requested") or False),
+            "full_document_page_limit": int(state.get("full_document_page_limit") or 0),
+            "query_embedding_ms": int(state.get("query_embedding_ms") or 0),
+            "doc_search_ms": int(state.get("doc_search_ms") or 0),
+            "page_search_ms": int(state.get("page_search_ms") or 0),
+            "rerank_ms": int(state.get("rerank_ms") or 0),
+            "retrieval_total_ms": int(state.get("retrieval_total_ms") or 0),
+            "image_retrieval_enabled": bool(state.get("image_retrieval_enabled") or False),
+            "retrieval_route": str(state.get("retrieval_route") or ""),
+            "visual_checks_count": int(state.get("visual_checks_count") or 0),
+            "evidence_recall_proxy": float(state.get("evidence_recall_proxy") or 0.0),
+            "node_timings_ms": {
+                str(key): int(value)
+                for key, value in dict(state.get("node_timings_ms") or {}).items()
+            },
+            "sources": effective_sources,
+            "retrieved_sources": all_sources,
+            "cited_sources": cited_sources,
+            "selected_citations": selected_citations,
+            "retrieved_sources_count": len(all_sources),
+            "cited_sources_count": len(cited_sources),
+        }
+        user_id = int(state.get("user_id") or 0)
+        conversation_id = state.get("conversation_id")
+        self.repository.save_qa_session(
+            user_id=user_id,
+            file_id=file_ids[0] if len(file_ids) == 1 else None,
+            conversation_id=int(conversation_id) if conversation_id is not None else None,
+            question=raw_question,
+            retrieval_metadata=retrieval_metadata,
+            answer=answer.answer_text,
+            model_used=answer.model_used,
+        )
+        return {
+            "node_timings_ms": _merge_node_timing(state, node_key="persist_turn", started_at=started_at),
+        }

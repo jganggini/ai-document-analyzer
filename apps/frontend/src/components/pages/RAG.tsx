@@ -1,0 +1,2455 @@
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { Layout } from '../common/Layout';
+import { ConfirmDeleteModal } from '../common/ConfirmDeleteModal';
+import { LoadingState } from '../common/LoadingState';
+import { ModalPortal } from '../common/ModalPortal';
+import { queryKeys } from '../../lib/queryClient';
+import {
+  metadataApi,
+  ragApi,
+  type MetadataUploadSummary,
+  type UploadPreparationGroup,
+  type UploadPreparationItem,
+} from '../../services/api';
+import { useToast } from '../../context/ToastContext';
+import { useAuth } from '../../context/AuthContext';
+
+const ITEMS_PER_PAGE = 10;
+const DEFAULT_UPLOAD_LANGUAGE = 'es';
+const DEFAULT_UPLOAD_ACCESS = 'private';
+const LANGUAGE_OPTIONS = [
+  { value: 'es', label: 'Spanish (es)' },
+  { value: 'pt', label: 'Portuguese (pt)' },
+  { value: 'en', label: 'English (en)' },
+];
+const ACCESS_OPTIONS = [
+  { value: 'private', label: 'Private' },
+  { value: 'all', label: 'All Users' },
+];
+
+function normalizeStatus(status: string | undefined): string {
+  const value = String(status || '').toLowerCase().trim();
+  if (value === 'registered') return 'pending';
+  if (value === 'processing') return 'processing_ocr';
+  if (value === 'failed') return 'error';
+  return value || 'pending';
+}
+
+function extractFolderFromObjectPath(objectPath: string): string {
+  const normalizedPath = String(objectPath || '').trim().replace(/\\/g, '/');
+  if (!normalizedPath) return '';
+  const segments = normalizedPath.split('/').filter(Boolean);
+  const sourceIndex = segments.findIndex((segment) =>
+    ['source', 'sources', 'processed', 'output', 'outputs', 'ocr'].includes(
+      segment.toLowerCase()
+    )
+  );
+  if (sourceIndex <= 1) return '';
+  const directFolder = segments[sourceIndex - 1] || '';
+  const parentFolder = segments[sourceIndex - 2] || '';
+  if (parentFolder && /-[a-f0-9]{8,}$/i.test(parentFolder)) {
+    return parentFolder.replace(/-[a-f0-9]{8,}$/i, '');
+  }
+  return directFolder;
+}
+
+function normalizeComparableSegment(value: string): string {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/\.[a-z0-9]+$/i, '')
+    .replace(/[^a-z0-9]+/g, '');
+}
+
+function getDocumentDisplayName(doc: any): string {
+  const fileName = String(doc?.original_name || doc?.filename || '').trim();
+  if (!fileName) return '-';
+  const objectPath = String(doc?.file_output_obj_name || doc?.file_input_obj_name || '');
+  const folder = extractFolderFromObjectPath(objectPath);
+  if (!folder) return fileName;
+  const normalizedFolder = normalizeComparableSegment(folder);
+  const normalizedFileStem = normalizeComparableSegment(fileName);
+  if (normalizedFolder && normalizedFolder === normalizedFileStem) {
+    return fileName;
+  }
+  return `${folder}/${fileName}`;
+}
+
+function DeleteDocumentConfirmMessage({ docNames }: { docNames: string[] }) {
+  const normalizedNames = docNames
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+  if (normalizedNames.length > 1) {
+    return (
+      <div className="space-y-2 text-sm leading-relaxed text-oracle-medium-gray">
+        <p>
+          Are you sure you want to delete <span className="font-medium text-oracle-dark-gray">{normalizedNames.length}</span>{' '}
+          selected documents?
+        </p>
+        <p>This action cannot be undone.</p>
+      </div>
+    );
+  }
+  const name = normalizedNames[0] || 'this document';
+  return (
+    <div className="flex w-full min-w-0 max-w-full flex-nowrap items-baseline gap-x-0.5 text-sm leading-relaxed text-oracle-medium-gray">
+      <span className="shrink-0">Are you sure you want to delete &quot;</span>
+      <span
+        className="min-w-0 flex-1 truncate text-center font-medium text-oracle-dark-gray"
+        title={name}
+      >
+        {name}
+      </span>
+      <span className="shrink-0">&quot;?</span>
+    </div>
+  );
+}
+
+type LooseMarkdownTable = {
+  caption?: string;
+  headers: string[];
+  rows: string[][];
+};
+
+function splitLooseTableCells(value: string): string[] {
+  const rawCells = String(value || '')
+    .replace(/\r/g, '')
+    .split('|')
+    .map((cell) => cell.replace(/\s+/g, ' ').trim());
+
+  while (rawCells.length > 0 && rawCells[0] === '') rawCells.shift();
+  while (rawCells.length > 0 && rawCells[rawCells.length - 1] === '') rawCells.pop();
+  return rawCells;
+}
+
+function isMarkdownSeparatorCell(value: string): boolean {
+  return /^:?-{2,}:?$/.test(String(value || '').trim());
+}
+
+function parseLooseMarkdownTable(value: string): LooseMarkdownTable | null {
+  const text = String(value || '').replace(/\r/g, '').trim();
+  if (!text || (text.match(/\|/g) || []).length < 4) return null;
+
+  const separatorMatch = text.match(/\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)+\|?/);
+  if (!separatorMatch || separatorMatch.index === undefined) return null;
+
+  const beforeSeparator = text.slice(0, separatorMatch.index).trim();
+  const afterSeparator = text.slice(separatorMatch.index + separatorMatch[0].length).trim();
+  const separatorCells = splitLooseTableCells(separatorMatch[0]).filter(isMarkdownSeparatorCell);
+  let caption = '';
+  let headers = splitLooseTableCells(beforeSeparator);
+  const columnCount = Math.max(separatorCells.length, headers.length);
+
+  if (columnCount < 2 || headers.length < 2) return null;
+  if (separatorCells.length >= 2 && headers.length > separatorCells.length) {
+    caption = headers.slice(0, headers.length - separatorCells.length).join(' | ');
+    headers = headers.slice(headers.length - separatorCells.length);
+  }
+
+  const normalizedColumnCount = Math.max(2, Math.min(columnCount, headers.length));
+  headers = headers.slice(0, normalizedColumnCount);
+  const rows = splitLooseTableRows(afterSeparator, normalizedColumnCount);
+
+  return { caption, headers, rows };
+}
+
+function splitLooseTableRows(value: string, columnCount: number): string[][] {
+  const body = String(value || '').trim();
+  if (!body) return [];
+
+  const collapsedRowSegments = body
+    .replace(/^\|/, '')
+    .replace(/\|$/, '')
+    .split(/\|\s+\|/g)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+
+  if (collapsedRowSegments.length > 1) {
+    return collapsedRowSegments
+      .map((segment) => {
+        const row = splitLooseTableCells(`| ${segment} |`).slice(0, columnCount);
+        while (row.length < columnCount) row.push('');
+        return row;
+      })
+      .filter((row) => row.some((cell) => cell.trim()));
+  }
+
+  const bodyCells = splitLooseTableCells(body).filter((cell) => cell.trim());
+  const rows: string[][] = [];
+  for (let index = 0; index < bodyCells.length; index += columnCount) {
+    const row = bodyCells.slice(index, index + columnCount);
+    while (row.length < columnCount) row.push('');
+    if (row.some((cell) => cell.trim())) {
+      rows.push(row);
+    }
+  }
+  return rows;
+}
+
+function formatMarkdownTable(table: LooseMarkdownTable): string {
+  const escapeCell = (cell: string) => String(cell || '').replace(/\|/g, '\\|').trim();
+  const headerLine = `| ${table.headers.map(escapeCell).join(' | ')} |`;
+  const separatorLine = `| ${table.headers.map(() => '---').join(' | ')} |`;
+  const rowLines = table.rows.map((row) => `| ${row.map(escapeCell).join(' | ')} |`);
+  return [table.caption ? `**${escapeCell(table.caption)}**` : '', headerLine, separatorLine, ...rowLines]
+    .filter(Boolean)
+    .join('\n');
+}
+
+function repairLooseMarkdownTables(markdown: string): string {
+  return String(markdown || '')
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((line) => {
+      const table = parseLooseMarkdownTable(line);
+      return table ? formatMarkdownTable(table) : line;
+    })
+    .join('\n');
+}
+
+function flattenReactText(node: React.ReactNode): string {
+  if (node === null || node === undefined || typeof node === 'boolean') return '';
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(flattenReactText).join('');
+  if (React.isValidElement(node)) return flattenReactText(node.props.children);
+  return '';
+}
+
+function DocumentMarkdownTable({ children }: React.ComponentPropsWithoutRef<'table'>) {
+  return (
+    <div className="not-prose my-3 max-h-[52vh] max-w-full overflow-auto rounded-xl border border-gray-200 bg-white shadow-sm">
+      <table className="min-w-full border-collapse text-left text-xs text-oracle-dark-gray">
+        {children}
+      </table>
+    </div>
+  );
+}
+
+function DocumentLooseTable({ table }: { table: LooseMarkdownTable }) {
+  return (
+    <>
+      {table.caption ? (
+        <p className="mb-2 mt-1 text-sm font-semibold text-oracle-dark-gray">{table.caption}</p>
+      ) : null}
+      <DocumentMarkdownTable>
+        <thead className="sticky top-0 z-10 bg-gray-100">
+          <tr>
+            {table.headers.map((header, index) => (
+              <th
+                key={`${header}-${index}`}
+                className="border border-gray-300 bg-gray-100 px-3 py-2 align-top font-semibold text-gray-800"
+              >
+                {header || `Column ${index + 1}`}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {table.rows.length > 0 ? (
+            table.rows.map((row, rowIndex) => (
+              <tr key={`row-${rowIndex}`} className="odd:bg-white even:bg-gray-50/60">
+                {table.headers.map((_, cellIndex) => (
+                  <td
+                    key={`cell-${rowIndex}-${cellIndex}`}
+                    className="border border-gray-200 px-3 py-2 align-top leading-5 text-oracle-medium-gray"
+                  >
+                    {row[cellIndex] || ''}
+                  </td>
+                ))}
+              </tr>
+            ))
+          ) : (
+            <tr>
+              <td
+                colSpan={table.headers.length}
+                className="border border-gray-200 px-3 py-3 text-sm text-oracle-light-gray"
+              >
+                No rows detected on this page.
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </DocumentMarkdownTable>
+    </>
+  );
+}
+
+function DocumentMarkdownParagraph({ children }: React.ComponentPropsWithoutRef<'p'>) {
+  const text = flattenReactText(children);
+  const looseTable = parseLooseMarkdownTable(text);
+  if (looseTable) {
+    return <DocumentLooseTable table={looseTable} />;
+  }
+  return <p className="my-1.5 text-[13px] leading-5 text-oracle-dark-gray">{children}</p>;
+}
+
+function DocumentMarkdownTh({ children }: React.ComponentPropsWithoutRef<'th'>) {
+  return (
+    <th className="border border-gray-300 bg-gray-100 px-3 py-2 align-top text-left font-semibold text-gray-800">
+      {children}
+    </th>
+  );
+}
+
+function DocumentMarkdownTd({ children }: React.ComponentPropsWithoutRef<'td'>) {
+  return (
+    <td className="border border-gray-200 px-3 py-2 align-top leading-5 text-oracle-medium-gray">
+      {children}
+    </td>
+  );
+}
+
+const DOCUMENT_MARKDOWN_COMPONENTS = {
+  p: DocumentMarkdownParagraph,
+  table: DocumentMarkdownTable,
+  thead: ({ children }: React.ComponentPropsWithoutRef<'thead'>) => (
+    <thead className="sticky top-0 z-10 bg-gray-100">{children}</thead>
+  ),
+  tbody: ({ children }: React.ComponentPropsWithoutRef<'tbody'>) => <tbody className="divide-y divide-gray-100">{children}</tbody>,
+  tr: ({ children }: React.ComponentPropsWithoutRef<'tr'>) => <tr className="odd:bg-white even:bg-gray-50/60">{children}</tr>,
+  th: DocumentMarkdownTh,
+  td: DocumentMarkdownTd,
+};
+
+function getDocumentDisplayParts(doc: any): { folder: string; fileName: string } {
+  const fileName = String(doc?.original_name || doc?.filename || '').trim();
+  if (!fileName) {
+    return { folder: '', fileName: '-' };
+  }
+  const objectPath = String(doc?.file_output_obj_name || doc?.file_input_obj_name || '');
+  const folder = extractFolderFromObjectPath(objectPath);
+  if (!folder) {
+    return { folder: '', fileName };
+  }
+  const normalizedFolder = normalizeComparableSegment(folder);
+  const normalizedFileStem = normalizeComparableSegment(fileName);
+  if (normalizedFolder && normalizedFolder === normalizedFileStem) {
+    return { folder: '', fileName };
+  }
+  return { folder, fileName };
+}
+
+function normalizeDocumentsPayload(payload: any): any[] {
+  const rawItems = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload?.items)
+    ? payload.items
+    : [];
+  return rawItems.map((item: any) => ({
+    id: item?.id ?? item?.file_id,
+    filename: item?.filename ?? item?.file_name ?? '',
+    original_name: item?.original_name ?? item?.file_name ?? item?.filename ?? '',
+    file_input_obj_name: item?.file_input_obj_name ?? '',
+    file_output_obj_name: item?.file_output_obj_name ?? '',
+    pages: item?.pages ?? item?.page_count ?? 0,
+    status: normalizeStatus(item?.status),
+    created_at: item?.created_at ?? item?.file_created ?? null,
+    access_profiles:
+      Array.isArray(item?.access_profiles) && item.access_profiles.length > 0
+        ? item.access_profiles
+        : item?.access_scope
+        ? [String(item.access_scope)]
+        : ['private'],
+  }));
+}
+
+function hasDocumentsInFlight(payload: any): boolean {
+  return normalizeDocumentsPayload(payload).some((item: any) =>
+    ['pending', 'processing_ocr'].includes(String(item?.status || ''))
+  );
+}
+
+function summarizeDocumentsQueue(documents: any[]): {
+  pending: number;
+  processing_ocr: number;
+  error: number;
+  completed: number;
+} {
+  return documents.reduce(
+    (summary, item) => {
+      const status = String(item?.status || '');
+      if (status === 'pending') summary.pending += 1;
+      else if (status === 'processing_ocr') summary.processing_ocr += 1;
+      else if (status === 'error') summary.error += 1;
+      else if (status === 'completed') summary.completed += 1;
+      return summary;
+    },
+    {
+      pending: 0,
+      processing_ocr: 0,
+      error: 0,
+      completed: 0,
+    }
+  );
+}
+
+function getPreparedItemKey(item: UploadPreparationItem): string {
+  return `${item.group_source_path}::${item.source_path}`;
+}
+
+function countEnabledPreparedItems(groups: UploadPreparationGroup[]): number {
+  return groups.reduce(
+    (total, group) => total + group.items.filter((item) => item.enabled).length,
+    0
+  );
+}
+
+function mergePreparedGroups(
+  previousGroups: UploadPreparationGroup[],
+  incomingGroups: UploadPreparationGroup[]
+): UploadPreparationGroup[] {
+  const orderedGroups = [...previousGroups];
+  const indexesBySource = new Map<string, number>();
+  orderedGroups.forEach((group, index) => {
+    indexesBySource.set(group.group_source_path, index);
+  });
+
+  incomingGroups.forEach((group) => {
+    const currentIndex = indexesBySource.get(group.group_source_path);
+    if (currentIndex === undefined) {
+      indexesBySource.set(group.group_source_path, orderedGroups.length);
+      orderedGroups.push(group);
+      return;
+    }
+    orderedGroups[currentIndex] = group;
+  });
+
+  return orderedGroups;
+}
+
+function formatUploadGroupKind(kind: string): string {
+  const normalizedKind = String(kind || '').trim().toLowerCase();
+  if (!normalizedKind) {
+    return 'Source';
+  }
+  if (normalizedKind === 'zip') {
+    return 'ZIP';
+  }
+  if (normalizedKind === 'pdf') {
+    return 'PDF';
+  }
+  return normalizedKind.charAt(0).toUpperCase() + normalizedKind.slice(1);
+}
+
+function formatCountLabel(count: number, singular: string, plural?: string): string {
+  const safeCount = Math.max(0, Number(count || 0));
+  const label = safeCount === 1 ? singular : plural || `${singular}s`;
+  return `${safeCount} ${label}`;
+}
+
+const compactUploadDraftSelectClassName = 'input-oracle !h-7 !px-2 !py-0 !pr-7 !text-[11px] !leading-tight bg-white';
+const compactUploadDraftFieldLabelClassName = 'space-y-1 xl:space-y-0';
+const uploadDraftRowGridClassName =
+  'flex flex-col gap-3 xl:grid xl:grid-cols-[minmax(0,1fr)_450px] xl:items-center xl:gap-3';
+const uploadDraftControlGridClassName =
+  'grid gap-2 md:grid-cols-2 xl:w-[450px] xl:grid-cols-[112px_180px_140px]';
+const uploadDraftActionButtonClassName =
+  'inline-flex h-10 shrink-0 cursor-pointer items-center justify-center gap-2 rounded border border-gray-300 bg-white px-3 text-sm font-medium text-gray-600 transition-colors hover:border-gray-400 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oracle-red/35 disabled:cursor-not-allowed disabled:opacity-50';
+const uploadDraftMetadataSelectClassName =
+  'h-10 min-w-[260px] shrink-0 rounded border border-gray-300 bg-white px-3 pr-9 text-sm font-medium text-gray-600 transition-colors hover:border-gray-400 hover:bg-gray-50 focus:border-oracle-red focus:outline-none focus:ring-2 focus:ring-oracle-red/35 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-400 disabled:opacity-70';
+const documentToolbarButtonClassName =
+  'flex h-10 shrink-0 items-center justify-center gap-2 rounded border border-gray-300 bg-white px-3 text-sm font-medium text-gray-600 transition-colors hover:border-gray-400 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50';
+
+type UploadDraftMetadataMatchState = 'none' | 'matched' | 'unmatched' | 'loading';
+
+function normalizeMetadataFileKey(value: string): string {
+  return String(value || '')
+    .trim()
+    .replace(/^\uFEFF/, '')
+    .replace(/^['"]+|['"]+$/g, '')
+    .replace(/\.(zip|pdf)$/i, '')
+    .toLowerCase();
+}
+
+function getUploadDraftMetadataMatchPresentation(matchState: UploadDraftMetadataMatchState): {
+  label: string;
+  className: string;
+} {
+  if (matchState === 'matched') {
+    return {
+      label: 'Matched',
+      className: 'border-emerald-200 bg-emerald-50 text-emerald-800',
+    };
+  }
+  if (matchState === 'unmatched') {
+    return {
+      label: 'No match',
+      className: 'border-amber-200 bg-amber-50 text-amber-800',
+    };
+  }
+  if (matchState === 'loading') {
+    return {
+      label: 'Checking',
+      className: 'border-gray-200 bg-gray-50 text-gray-600',
+    };
+  }
+  return {
+    label: 'No metadata',
+    className: 'border-gray-200 bg-gray-50 text-oracle-medium-gray',
+  };
+}
+
+export function RAG() {
+  const [statusFilter, setStatusFilter] = useState<string>('');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [uploadDraftFilter, setUploadDraftFilter] = useState('');
+  const [isDragging, setIsDragging] = useState(false);
+  const [viewingDoc, setViewingDoc] = useState<any>(null);
+  const [showUploadModal, setShowUploadModal] = useState(false);
+  const [uploadDraftGroups, setUploadDraftGroups] = useState<UploadPreparationGroup[]>([]);
+  const [selectedMetadataUploadId, setSelectedMetadataUploadId] = useState('');
+  const [metadataPreviewFileKeys, setMetadataPreviewFileKeys] = useState<string[]>([]);
+  const [collapsedUploadGroups, setCollapsedUploadGroups] = useState<Record<string, boolean>>({});
+  const [editingDocs, setEditingDocs] = useState<any[] | null>(null);
+  const [deletingDocs, setDeletingDocs] = useState<any[] | null>(null);
+  const [replaceConfirm, setReplaceConfirm] = useState<{
+    duplicateDocs: any[];
+    groups: UploadPreparationGroup[];
+  } | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [selectedDocumentIds, setSelectedDocumentIds] = useState<number[]>([]);
+  const selectAllDocumentsRef = useRef<HTMLInputElement | null>(null);
+  const { showToast } = useToast();
+  const { isAdmin, user } = useAuth();
+  const queryClient = useQueryClient();
+  const sessionScope = user?.user_id ?? 'anonymous';
+
+  const { data: documentsData, isLoading } = useQuery({
+    queryKey: queryKeys.rag.documents(sessionScope),
+    queryFn: () => ragApi.listDocuments(),
+    refetchInterval: (query) =>
+      hasDocumentsInFlight((query.state.data as any)?.data) ? 5000 : false,
+  });
+
+  const metadataUploadsQuery = useQuery({
+    queryKey: queryKeys.metadata.uploads(sessionScope),
+    queryFn: () =>
+      metadataApi
+        .listUploads({ includeArchived: false })
+        .then((response) => response.data.items || []),
+    enabled: showUploadModal,
+  });
+
+  const selectedMetadataUpload = useMemo(
+    () =>
+      (metadataUploadsQuery.data || []).find(
+        (item: MetadataUploadSummary) => item.metadata_upload_id === selectedMetadataUploadId
+      ) || null,
+    [metadataUploadsQuery.data, selectedMetadataUploadId]
+  );
+
+  const selectedMetadataDetailQuery = useQuery({
+    queryKey: selectedMetadataUploadId
+      ? queryKeys.metadata.detail(sessionScope, selectedMetadataUploadId)
+      : ['metadata-upload-detail', sessionScope, 'none'],
+    queryFn: () =>
+      metadataApi.getUpload(selectedMetadataUploadId, 1000).then((response) => response.data),
+    enabled: showUploadModal && Boolean(selectedMetadataUploadId),
+  });
+
+  const prepareUploadMutation = useMutation({
+    mutationFn: (files: File[]) =>
+      ragApi.prepareUploadPlan(files, DEFAULT_UPLOAD_ACCESS, DEFAULT_UPLOAD_LANGUAGE),
+    onSuccess: (response) => {
+      const groups = Array.isArray(response?.data?.groups) ? response.data.groups : [];
+      const errors = Array.isArray(response?.data?.errors) ? response.data.errors : [];
+      if (groups.length > 0) {
+        setUploadDraftGroups((previousGroups) => mergePreparedGroups(previousGroups, groups));
+        setCollapsedUploadGroups((previousGroups) => {
+          const nextGroups = { ...previousGroups };
+          groups.forEach((group) => {
+            nextGroups[group.group_source_path] = true;
+          });
+          return nextGroups;
+        });
+        showToast(`${countEnabledPreparedItems(groups)} document(s) ready to review`, 'success');
+      }
+      if (errors.length > 0) {
+        const firstError = String(errors[0]?.error || 'Unknown preparation error');
+        showToast(`${errors.length} source(s) could not be prepared (${firstError})`, 'error');
+      }
+    },
+    onError: (error: any) => {
+      const message = error?.response?.data?.detail || error?.message || 'Failed to prepare uploaded files';
+      showToast(message, 'error');
+    },
+  });
+
+  const processUploadMutation = useMutation({
+    mutationFn: ({
+      groups,
+      metadataUploadId,
+      replaceFileIds,
+    }: {
+      groups: UploadPreparationGroup[];
+      metadataUploadId?: string | null;
+      replaceFileIds?: number[];
+    }) => ragApi.processPreparedDocuments(groups, metadataUploadId, replaceFileIds),
+    onSuccess: (response, variables) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.rag.documents(sessionScope) });
+      setIsDragging(false);
+      const queuedFiles = Number(
+        response?.data?.queued_files || countEnabledPreparedItems(variables.groups)
+      );
+      if (queuedFiles > 0) {
+        showToast(`${queuedFiles} document(s) queued for processing`, 'success');
+      }
+      const jobId = String(response?.data?.job?.job_id || '');
+      if (jobId) {
+        watchIngestJob(jobId, queuedFiles === 1 ? 'Document' : `${queuedFiles} documents`);
+      }
+      closeUploadModal();
+      setReplaceConfirm(null);
+    },
+    onError: (error: any) => {
+      const message = error?.response?.data?.detail || error?.message || 'Failed to queue documents';
+      showToast(message, 'error');
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => ragApi.deleteDocument(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.rag.documents(sessionScope) });
+      showToast('Document deleted successfully', 'success');
+    },
+    onError: () => showToast('Failed to delete document', 'error'),
+  });
+
+  const bulkDeleteMutation = useMutation({
+    mutationFn: (fileIds: number[]) => ragApi.bulkDeleteDocuments(fileIds),
+    onSuccess: (_, fileIds) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.rag.documents(sessionScope) });
+      setSelectedDocumentIds((previousIds) =>
+        previousIds.filter((fileId) => !fileIds.includes(fileId))
+      );
+      showToast(`${fileIds.length} document(s) deleted successfully`, 'success');
+    },
+    onError: () => showToast('Failed to delete selected documents', 'error'),
+  });
+
+  const retryMutation = useMutation({
+    mutationFn: (doc: any) => ragApi.retryDocument(String(doc?.id || '')),
+    onSuccess: (response, doc) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.rag.documents(sessionScope) });
+      const jobId = String(response?.data?.job_id || '');
+      const label = getDocumentDisplayName(doc);
+      if (jobId) {
+        watchIngestJob(jobId, label);
+      }
+      showToast('Document re-queued for processing', 'success');
+    },
+    onError: (error: any) =>
+      showToast(error?.response?.data?.detail || error?.message || 'Failed to retry document', 'error'),
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: any }) => ragApi.updateDocument(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.rag.documents(sessionScope) });
+      showToast('Document updated successfully', 'success');
+      setEditingDocs(null);
+    },
+    onError: () => showToast('Failed to update document', 'error'),
+  });
+
+  const bulkUpdateMutation = useMutation({
+    mutationFn: ({ fileIds, data }: { fileIds: number[]; data: any }) =>
+      ragApi.bulkUpdateDocuments(fileIds, data),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.rag.documents(sessionScope) });
+      showToast(`${variables.fileIds.length} document(s) updated successfully`, 'success');
+      setEditingDocs(null);
+    },
+    onError: () => showToast('Failed to update selected documents', 'error'),
+  });
+
+  const watchIngestJob = useCallback(
+    (jobId: string, filename: string, attempt = 0) => {
+      if (!jobId) return;
+      const maxAttempts = 180;
+      const intervalMs = 2000;
+      window.setTimeout(async () => {
+        try {
+          const response = await ragApi.getIngestJob(jobId);
+          const status = String(response?.data?.job?.status || '').toLowerCase();
+          if (status === 'completed') {
+            queryClient.invalidateQueries({ queryKey: queryKeys.rag.documents(sessionScope) });
+            return;
+          }
+          if (status === 'failed') {
+            const backendError = String(response?.data?.job?.error || 'Unknown processing error');
+            showToast(`${filename}: ${backendError}`, 'error');
+            queryClient.invalidateQueries({ queryKey: queryKeys.rag.documents(sessionScope) });
+            return;
+          }
+        } catch (err: unknown) {
+          const status = (err as { response?: { status?: number } })?.response?.status;
+          // Ingest jobs live in memory on the backend: restart or hot reload can yield a 404.
+          if (status === 404) {
+            queryClient.invalidateQueries({ queryKey: queryKeys.rag.documents(sessionScope) });
+            return;
+          }
+          // Retry transient failures such as network issues or 5xx responses.
+        }
+        if (attempt < maxAttempts) {
+          watchIngestJob(jobId, filename, attempt + 1);
+        }
+      }, intervalMs);
+    },
+    [queryClient, sessionScope, showToast]
+  );
+
+  const isAcceptedUploadFile = useCallback((file: File) => {
+    const fileName = (file.name || '').toLowerCase();
+    const mimeType = (file.type || '').toLowerCase();
+    return (
+      fileName.endsWith('.pdf') ||
+      fileName.endsWith('.zip') ||
+      mimeType === 'application/pdf' ||
+      mimeType === 'application/zip' ||
+      mimeType === 'application/x-zip-compressed' ||
+      mimeType === 'multipart/x-zip'
+    );
+  }, []);
+
+  const prepareUploadDraftFiles = useCallback(
+    (incomingFiles: File[]) => {
+      const uniqueFiles = Array.from(
+        new Map(
+          incomingFiles.map((file) => [`${file.name}-${file.size}-${file.lastModified}`, file] as const)
+        ).values()
+      );
+      if (uniqueFiles.length === 0) {
+        showToast('Only PDF and ZIP files are allowed', 'error');
+        return;
+      }
+      prepareUploadMutation.mutate(uniqueFiles);
+    },
+    [prepareUploadMutation, showToast]
+  );
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+  }, []);
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      setIsDragging(false);
+      const files = Array.from(e.dataTransfer.files).filter((f) => isAcceptedUploadFile(f));
+      if (files.length > 0) {
+        prepareUploadDraftFiles(files);
+      } else {
+        showToast('Only PDF and ZIP files are allowed', 'error');
+      }
+    },
+    [isAcceptedUploadFile, prepareUploadDraftFiles, showToast]
+  );
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []).filter((f) => isAcceptedUploadFile(f));
+    if (files.length > 0) {
+      prepareUploadDraftFiles(files);
+    } else {
+      showToast('Only PDF and ZIP files are allowed', 'error');
+    }
+    e.target.value = '';
+  };
+
+  const handleDownload = async (doc: any) => {
+    try {
+      const response = await ragApi.downloadDocument(doc.id);
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = doc.original_name || doc.filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch {
+      showToast('Failed to download document', 'error');
+    }
+  };
+
+  const documentsRaw = useMemo(
+    () => normalizeDocumentsPayload(documentsData?.data),
+    [documentsData?.data]
+  );
+  const queue = summarizeDocumentsQueue(documentsRaw);
+  const filteredDocuments = documentsRaw.filter((doc: any) => {
+    if (statusFilter && String(doc?.status || '') !== statusFilter) {
+      return false;
+    }
+    if (!searchTerm) return true;
+    const search = searchTerm.toLowerCase();
+    return doc.filename?.toLowerCase().includes(search) ||
+           doc.original_name?.toLowerCase().includes(search) ||
+           getDocumentDisplayName(doc).toLowerCase().includes(search);
+  });
+  const selectedDocumentIdSet = new Set(selectedDocumentIds);
+  const selectedDocuments = documentsRaw.filter((doc: any) =>
+    selectedDocumentIdSet.has(Number(doc.id))
+  );
+  const totalDocuments = filteredDocuments.length;
+  const totalPages = Math.ceil(totalDocuments / ITEMS_PER_PAGE);
+  const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+  const endIndex = startIndex + ITEMS_PER_PAGE;
+  const documents = filteredDocuments.slice(startIndex, endIndex);
+  const selectableCurrentPageDocumentIds = documents
+    .map((doc: any) => Number(doc.id))
+    .filter((docId) => Number.isFinite(docId) && docId > 0);
+  const allCurrentPageDocumentsSelected =
+    selectableCurrentPageDocumentIds.length > 0 &&
+    selectableCurrentPageDocumentIds.every((docId) => selectedDocumentIdSet.has(docId));
+  const someCurrentPageDocumentsSelected =
+    !allCurrentPageDocumentsSelected &&
+    selectableCurrentPageDocumentIds.some((docId) => selectedDocumentIdSet.has(docId));
+  const enabledPreparedItems = countEnabledPreparedItems(uploadDraftGroups);
+  const totalPreparedItems = uploadDraftGroups.reduce(
+    (total, group) => total + group.items.length,
+    0
+  );
+  const hasPreparedUploads = uploadDraftGroups.length > 0;
+  const normalizedUploadDraftFilter = uploadDraftFilter.trim().toLowerCase();
+  const hasUploadDraftFilter = normalizedUploadDraftFilter.length > 0;
+  const hasMetadataSelection = Boolean(selectedMetadataUploadId);
+  const selectedMetadataLabel = selectedMetadataUpload
+    ? selectedMetadataUpload.display_name || selectedMetadataUpload.source_file_name
+    : '';
+  const metadataPreviewFileKeySet = new Set(metadataPreviewFileKeys);
+  const getUploadDraftMetadataMatchState = (archiveSlug: string): UploadDraftMetadataMatchState => {
+    if (!hasMetadataSelection) {
+      return 'none';
+    }
+    if (selectedMetadataUploadId && selectedMetadataDetailQuery.isFetching && metadataPreviewFileKeys.length === 0) {
+      return 'loading';
+    }
+    return metadataPreviewFileKeySet.has(normalizeMetadataFileKey(archiveSlug))
+      ? 'matched'
+      : 'unmatched';
+  };
+  const metadataMatchedPreparedItems = hasMetadataSelection
+    ? uploadDraftGroups.reduce(
+        (total, group) =>
+          total +
+          group.items.filter((item) =>
+            metadataPreviewFileKeySet.has(normalizeMetadataFileKey(item.archive_slug))
+          ).length,
+        0
+      )
+    : 0;
+  const preparedUploadsSummary = prepareUploadMutation.isPending
+    ? 'Preparing files...'
+    : hasPreparedUploads
+    ? `${formatCountLabel(totalPreparedItems, 'file')} total \u00B7 ${enabledPreparedItems} selected${
+        hasMetadataSelection
+          ? ` \u00B7 metadata ${selectedMetadataLabel || 'selected'} (${metadataMatchedPreparedItems} matched)`
+          : ''
+      }`
+    : `Select PDF or ZIP files to prepare the ingestion batch.${
+        hasMetadataSelection ? ` Metadata: ${selectedMetadataLabel || 'selected'}` : ''
+      }`;
+  const canProcessUploadDraft =
+    enabledPreparedItems > 0 &&
+    !prepareUploadMutation.isPending &&
+    !processUploadMutation.isPending;
+
+  const availableDocumentIdsSignature = useMemo(
+    () =>
+      documentsRaw
+        .map((doc: any) => Number(doc.id))
+        .filter((docId) => Number.isFinite(docId) && docId > 0)
+        .sort((left, right) => left - right)
+        .join(','),
+    [documentsRaw]
+  );
+
+  useEffect(() => {
+    const availableDocumentIds = new Set(
+      availableDocumentIdsSignature
+        ? availableDocumentIdsSignature.split(',').map((value) => Number(value))
+        : []
+    );
+    setSelectedDocumentIds((previousIds) => {
+      const nextIds = previousIds.filter((docId) => availableDocumentIds.has(docId));
+      if (
+        nextIds.length === previousIds.length &&
+        nextIds.every((docId, index) => docId === previousIds[index])
+      ) {
+        return previousIds;
+      }
+      return nextIds;
+    });
+  }, [availableDocumentIdsSignature]);
+
+  useEffect(() => {
+    if (!selectAllDocumentsRef.current) {
+      return;
+    }
+    selectAllDocumentsRef.current.indeterminate = someCurrentPageDocumentsSelected;
+  }, [someCurrentPageDocumentsSelected]);
+
+  useEffect(() => {
+    if (!selectedMetadataUploadId) {
+      setMetadataPreviewFileKeys([]);
+      return;
+    }
+    const rowKeys = (selectedMetadataDetailQuery.data?.rows || [])
+      .map((row) => normalizeMetadataFileKey(row.file))
+      .filter(Boolean);
+    setMetadataPreviewFileKeys(Array.from(new Set(rowKeys)));
+  }, [selectedMetadataDetailQuery.data?.rows, selectedMetadataUploadId]);
+
+  const filteredUploadDraftGroups = uploadDraftGroups.reduce<
+    Array<{
+      group: UploadPreparationGroup;
+      items: UploadPreparationItem[];
+      groupMatches: boolean;
+    }>
+  >((accumulator, group) => {
+    if (!hasUploadDraftFilter) {
+      accumulator.push({
+        group,
+        items: group.items,
+        groupMatches: false,
+      });
+      return accumulator;
+    }
+
+    const groupSearchText = [group.group_name, group.group_kind, group.archive_slug]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+    const groupMatches = groupSearchText.includes(normalizedUploadDraftFilter);
+        const items = groupMatches
+      ? group.items
+      : group.items.filter((item) =>
+          [
+            item.display_name,
+            item.file_name,
+            item.document_code,
+            item.document_language,
+            item.access,
+          ]
+            .filter(Boolean)
+            .join(' ')
+            .toLowerCase()
+            .includes(normalizedUploadDraftFilter)
+        );
+
+    if (groupMatches || items.length > 0) {
+      accumulator.push({
+        group,
+        items,
+        groupMatches,
+      });
+    }
+
+    return accumulator;
+  }, []);
+
+  const clearMetadataSelection = () => {
+    setSelectedMetadataUploadId('');
+    setMetadataPreviewFileKeys([]);
+  };
+
+  const handleExistingMetadataSelect = (metadataUploadId: string) => {
+    setSelectedMetadataUploadId(metadataUploadId);
+    setMetadataPreviewFileKeys([]);
+  };
+
+  const closeUploadModal = () => {
+    setShowUploadModal(false);
+    setUploadDraftGroups([]);
+    clearMetadataSelection();
+    setCollapsedUploadGroups({});
+    setUploadDraftFilter('');
+    setIsDragging(false);
+    setReplaceConfirm(null);
+    prepareUploadMutation.reset();
+    processUploadMutation.reset();
+  };
+
+  const removeUploadDraftGroup = (groupSourcePath: string) => {
+    setUploadDraftGroups((previousGroups) =>
+      previousGroups.filter((group) => group.group_source_path !== groupSourcePath)
+    );
+    setCollapsedUploadGroups((previousGroups) => {
+      if (!(groupSourcePath in previousGroups)) {
+        return previousGroups;
+      }
+      const nextGroups = { ...previousGroups };
+      delete nextGroups[groupSourcePath];
+      return nextGroups;
+    });
+  };
+
+  const toggleUploadDraftGroup = (groupSourcePath: string) => {
+    setCollapsedUploadGroups((previousGroups) => ({
+      ...previousGroups,
+      [groupSourcePath]: !previousGroups[groupSourcePath],
+    }));
+  };
+
+  const updateUploadDraftGroupEnabled = (groupSourcePath: string, enabled: boolean) => {
+    setUploadDraftGroups((previousGroups) =>
+      previousGroups.map((group) => {
+        if (group.group_source_path !== groupSourcePath) {
+          return group;
+        }
+        return {
+          ...group,
+          items: group.items.map((item) => ({ ...item, enabled })),
+        };
+      })
+    );
+  };
+
+  const updateUploadDraftItem = (
+    groupSourcePath: string,
+    sourcePath: string,
+    patch: Partial<UploadPreparationItem>
+  ) => {
+    setUploadDraftGroups((previousGroups) =>
+      previousGroups.map((group) => {
+        if (group.group_source_path !== groupSourcePath) {
+          return group;
+        }
+        return {
+          ...group,
+          items: group.items.map((item) =>
+            item.source_path === sourcePath ? { ...item, ...patch } : item
+          ),
+        };
+      })
+    );
+  };
+
+  const queueUploadDraft = useCallback(
+    (groups: UploadPreparationGroup[], replaceFileIds: number[] = []) => {
+      const metadataUploadId = selectedMetadataUploadId || null;
+      processUploadMutation.mutate({ groups, metadataUploadId, replaceFileIds });
+    },
+    [processUploadMutation, selectedMetadataUploadId]
+  );
+
+  const submitUploadDraft = () => {
+    const enabledItems = uploadDraftGroups.flatMap((group) => group.items).filter((item) => item.enabled);
+    if (enabledItems.length === 0) {
+      showToast('Select at least one document to process', 'error');
+      return;
+    }
+
+    const duplicateById = new Map<string, any>();
+    documentsRaw.forEach((document: any) => {
+      const documentName = String(document.original_name || document.filename || '').trim().toLowerCase();
+      if (!documentName) {
+        return;
+      }
+      if (enabledItems.some((item) => item.file_name.toLowerCase() === documentName)) {
+        duplicateById.set(String(document.id), document);
+      }
+    });
+    const duplicateDocs = Array.from(duplicateById.values());
+
+    if (duplicateDocs.length > 0) {
+      setReplaceConfirm({
+        duplicateDocs,
+        groups: uploadDraftGroups.map((group) => ({
+          ...group,
+          items: group.items.map((item) => ({ ...item })),
+        })),
+      });
+      return;
+    }
+
+    void queueUploadDraft(uploadDraftGroups);
+  };
+
+  const handleSearchChange = (value: string) => {
+    setSearchTerm(value);
+    setCurrentPage(1);
+  };
+
+  const toggleDocumentSelection = (documentId: number, selected: boolean) => {
+    if (!Number.isFinite(documentId) || documentId <= 0) {
+      return;
+    }
+    setSelectedDocumentIds((previousIds) => {
+      if (selected) {
+        return previousIds.includes(documentId) ? previousIds : [...previousIds, documentId];
+      }
+      return previousIds.filter((currentId) => currentId !== documentId);
+    });
+  };
+
+  const toggleAllVisibleDocuments = (selected: boolean) => {
+    setSelectedDocumentIds((previousIds) => {
+      const previousIdSet = new Set(previousIds);
+      if (selected) {
+        selectableCurrentPageDocumentIds.forEach((documentId) => previousIdSet.add(documentId));
+      } else {
+        selectableCurrentPageDocumentIds.forEach((documentId) => previousIdSet.delete(documentId));
+      }
+      return Array.from(previousIdSet);
+    });
+  };
+
+  const openSingleDocumentEditor = (doc: any) => {
+    setEditingDocs([doc]);
+  };
+
+  const openBulkDocumentEditor = () => {
+    if (selectedDocuments.length === 0) {
+      return;
+    }
+    setEditingDocs(selectedDocuments);
+  };
+
+  const openSingleDocumentDeleteConfirm = (doc: any) => {
+    setDeletingDocs([doc]);
+  };
+
+  const openBulkDocumentDeleteConfirm = () => {
+    if (selectedDocuments.length === 0) {
+      return;
+    }
+    setDeletingDocs(selectedDocuments);
+  };
+
+  const highlightText = (text: string | undefined, search: string) => {
+    if (!text || !search) return text || '-';
+    const index = text.toLowerCase().indexOf(search.toLowerCase());
+    if (index === -1) return text;
+    return (
+      <>
+        {text.slice(0, index)}
+        <span className="bg-yellow-200 px-0.5 rounded">{text.slice(index, index + search.length)}</span>
+        {text.slice(index + search.length)}
+      </>
+    );
+  };
+
+  const getStatusBadge = (status: string) => {
+    const classes: Record<string, string> = {
+      completed:
+        'inline-flex items-center rounded-xl border border-emerald-200 bg-emerald-50/60 px-2.5 py-1 text-[11px] font-semibold tracking-wide text-emerald-700',
+      pending:
+        'inline-flex items-center rounded-xl border border-amber-200 bg-amber-50/60 px-2.5 py-1 text-[11px] font-semibold tracking-wide text-amber-700',
+      processing_ocr:
+        'inline-flex items-center rounded-xl border border-blue-200 bg-blue-50/60 px-2.5 py-1 text-[11px] font-semibold tracking-wide text-blue-700',
+      vectorizing:
+        'inline-flex items-center rounded-xl border border-purple-200 bg-purple-50/60 px-2.5 py-1 text-[11px] font-semibold tracking-wide text-purple-700',
+      error:
+        'inline-flex items-center rounded-xl border border-rose-200 bg-rose-50/60 px-2.5 py-1 text-[11px] font-semibold tracking-wide text-rose-700',
+    };
+    return (
+      classes[status] ||
+      'inline-flex items-center rounded-xl border border-gray-200 bg-gray-50 px-2.5 py-1 text-[11px] font-semibold tracking-wide text-gray-700'
+    );
+  };
+
+  const getStatusLabel = (status: string) => {
+    const labels: Record<string, string> = {
+      completed: 'Completed',
+      pending: 'Pending',
+      processing_ocr: 'OCR',
+      vectorizing: 'Vectorizing',
+      error: 'Error',
+    };
+    return labels[status] || String(status || '');
+  };
+
+  const getAccessLabel = (accessValue: string) => {
+    const normalized = String(accessValue || '').trim().toLowerCase();
+    if (normalized === 'private') return 'Private';
+    if (normalized === 'all') return 'All Users';
+    return normalized
+      .split(/[_\s-]+/)
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ');
+  };
+
+  return (
+    <Layout>
+      <div className="space-y-6">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900 mb-2">Retrieval-Augmented Generation (RAG)</h1>
+          </div>
+          <button
+            type="button"
+              onClick={() => {
+                setShowUploadModal(true);
+                setUploadDraftGroups([]);
+                clearMetadataSelection();
+                setIsDragging(false);
+                setReplaceConfirm(null);
+              }}
+            className="flex-shrink-0 inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white bg-oracle-red hover:bg-oracle-red/90 border border-transparent transition-colors"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+            </svg>
+            File
+          </button>
+        </div>
+
+        <div className="app-light-surface rag-light-surface bg-white rounded-lg shadow p-8 space-y-6">
+          {/* Queue Status */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+            <div className="h-10 rounded-xl border border-amber-200 bg-amber-50/60 shadow-sm px-3 flex items-center justify-between">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-900/80 truncate">Pending</p>
+              <p className="text-xl font-bold leading-none tabular-nums text-amber-700">{queue.pending || 0}</p>
+            </div>
+            <div className="h-10 rounded-xl border border-blue-200 bg-blue-50/60 shadow-sm px-3 flex items-center justify-between">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-blue-900/80 truncate">OCR</p>
+              <p className="text-xl font-bold leading-none tabular-nums text-blue-700">{queue.processing_ocr || 0}</p>
+            </div>
+            <div className="h-10 rounded-xl border border-rose-200 bg-rose-50/60 shadow-sm px-3 flex items-center justify-between">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-rose-900/80 truncate">Error</p>
+              <p className="text-xl font-bold leading-none tabular-nums text-rose-700">{queue.error || 0}</p>
+            </div>
+            <div className="h-10 rounded-xl border border-emerald-200 bg-emerald-50/60 shadow-sm px-3 flex items-center justify-between">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-emerald-900/80 truncate">Completed</p>
+              <p className="text-xl font-bold leading-none tabular-nums text-emerald-700">{queue.completed || 0}</p>
+            </div>
+          </div>
+
+          {/* Search and Filter */}
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
+            <div className="grid flex-1 grid-cols-1 gap-3 md:grid-cols-[1fr_150px]">
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={(e) => handleSearchChange(e.target.value)}
+                placeholder="Search by filename..."
+                className="input-oracle"
+              />
+              <select
+                value={statusFilter}
+                onChange={(e) => {
+                  setStatusFilter(e.target.value);
+                  setCurrentPage(1);
+                }}
+                className="input-oracle"
+              >
+                <option value="">All statuses</option>
+                <option value="completed">Completed</option>
+                <option value="pending">Pending</option>
+                <option value="processing_ocr">OCR</option>
+                <option value="error">Error</option>
+              </select>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  queryClient.refetchQueries({ queryKey: queryKeys.rag.documents(sessionScope) });
+                }}
+                disabled={isLoading}
+                title="Refresh"
+                className={`${documentToolbarButtonClassName} w-10 px-0`}
+                aria-label="Refresh"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+              </button>
+              {isAdmin && (
+                <>
+                  <button
+                    type="button"
+                    onClick={openBulkDocumentEditor}
+                    disabled={selectedDocuments.length === 0 || bulkUpdateMutation.isPending || updateMutation.isPending}
+                    className={`${documentToolbarButtonClassName} w-10 px-0`}
+                    title="Edit selected documents"
+                    aria-label="Edit selected documents"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                    </svg>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={openBulkDocumentDeleteConfirm}
+                    disabled={selectedDocuments.length === 0 || bulkDeleteMutation.isPending || deleteMutation.isPending}
+                    className={`${documentToolbarButtonClassName} w-10 px-0`}
+                    title="Delete selected documents"
+                    aria-label="Delete selected documents"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Documents Table */}
+          <div className="overflow-x-auto rounded-lg border border-gray-200/70 bg-white">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="w-12 px-4 py-3 text-center">
+                    <input
+                      ref={selectAllDocumentsRef}
+                      type="checkbox"
+                      checked={allCurrentPageDocumentsSelected}
+                      onChange={(e) => toggleAllVisibleDocuments(e.target.checked)}
+                      className="h-4 w-4 rounded border-gray-300 text-oracle-red accent-oracle-red focus:ring-oracle-red"
+                      aria-label="Select all documents on the current page"
+                    />
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Document</th>
+                  <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Pages</th>
+                  <th className="w-28 min-w-[7rem] px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Access</th>
+                  <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider w-[180px] min-w-[180px]">
+                    Created
+                  </th>
+                  <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider w-24">Status</th>
+                  <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider w-28">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {isLoading ? (
+                  <tr>
+                    <td colSpan={7} className="px-4 py-8">
+                      <LoadingState size="sm" />
+                    </td>
+                  </tr>
+                ) : documents.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="px-4 py-8 text-center text-oracle-light-gray">
+                      No documents found
+                    </td>
+                  </tr>
+                ) : (
+                  documents.map((doc: any) => (
+                    <tr key={doc.id} className="hover:bg-gray-50">
+                      <td className="px-4 py-3 text-center align-top">
+                        <input
+                          type="checkbox"
+                          checked={selectedDocumentIdSet.has(Number(doc.id))}
+                          onChange={(e) => toggleDocumentSelection(Number(doc.id), e.target.checked)}
+                          className="mt-1 h-4 w-4 rounded border-gray-300 text-oracle-red accent-oracle-red focus:ring-oracle-red"
+                          aria-label={`Select ${doc.original_name || doc.filename || 'document'}`}
+                        />
+                      </td>
+                      <td className="px-4 py-3">
+                        {(() => {
+                          const { folder, fileName } = getDocumentDisplayParts(doc);
+                          return (
+                        <div className="flex items-center">
+                          <div className="min-w-0 flex flex-wrap items-center gap-0.5">
+                            {folder && (
+                              <div className="flex items-center gap-0.5 min-w-0 shrink-0">
+                                <span className="text-xs bg-oracle-bg-gray px-1.5 py-0.5 rounded">
+                                  {highlightText(folder, searchTerm)}
+                                </span>
+                                <span className="text-xs text-oracle-light-gray">/</span>
+                              </div>
+                            )}
+                            <span className="inline-block w-fit text-xs bg-oracle-bg-gray px-1.5 py-0.5 rounded truncate max-w-xs">
+                              {highlightText(fileName, searchTerm)}
+                            </span>
+                          </div>
+                        </div>
+                          );
+                        })()}
+                      </td>
+                      <td className="px-4 py-3 text-sm text-oracle-medium-gray text-center">{doc.pages || '-'}</td>
+                      <td className="w-28 min-w-[7rem] px-4 py-3">
+                        <div className="flex flex-wrap gap-1">
+                          {doc.access_profiles?.map((p: string, i: number) => (
+                            <span key={i} className="whitespace-nowrap text-xs bg-oracle-bg-gray px-1.5 py-0.5 rounded">
+                              {getAccessLabel(p)}
+                            </span>
+                          ))}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-sm text-oracle-light-gray text-center w-[180px] min-w-[180px]">
+                        {doc.created_at ? (() => {
+                          const d = new Date(doc.created_at);
+                          const pad = (n: number) => String(n).padStart(2, '0');
+                          return `${pad(d.getDate())}-${pad(d.getMonth() + 1)}-${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+                        })() : '-'}
+                      </td>
+                      <td className="px-4 py-3 text-center w-24">
+                        <span className={getStatusBadge(doc.status)}>{getStatusLabel(doc.status)}</span>
+                      </td>
+                      <td className="px-4 py-3 text-right w-28">
+                        <div className="flex justify-end gap-1">
+                          {doc.status === 'completed' && (
+                            <>
+                              <button
+                                onClick={() => setViewingDoc(doc)}
+                                className="p-1.5 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
+                                title="View PDF & Markdown"
+                              >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                                </svg>
+                              </button>
+                            </>
+                          )}
+                          <button
+                            onClick={() => handleDownload(doc)}
+                            className="p-1.5 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
+                            title="Download"
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                            </svg>
+                          </button>
+                          {isAdmin && (
+                            <button
+                              onClick={() => openSingleDocumentEditor(doc)}
+                              className="p-1.5 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
+                              title="Edit"
+                            >
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                              </svg>
+                            </button>
+                          )}
+                          {doc.status === 'error' && isAdmin && (
+                            <button
+                              onClick={() => retryMutation.mutate(doc)}
+                              className="p-1.5 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
+                              disabled={retryMutation.isPending}
+                              title="Retry"
+                            >
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                              </svg>
+                            </button>
+                          )}
+                          {isAdmin && (
+                            <button
+                              onClick={() => openSingleDocumentDeleteConfirm(doc)}
+                              className="p-1.5 rounded border border-red-300 bg-white text-red-600 hover:bg-red-50 transition-colors"
+                              disabled={deleteMutation.isPending}
+                              title="Delete"
+                            >
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                              </svg>
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+
+            {/* Pagination */}
+            {totalDocuments > 0 && (
+              <div className="mt-4 flex items-center justify-between border-t border-gray-200 px-4 py-3">
+                <p className="text-sm text-gray-600">
+                  Showing {startIndex + 1}–{Math.min(endIndex, totalDocuments)} of {totalDocuments}
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                    disabled={currentPage === 1}
+                    className="px-3 py-1 text-sm border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Previous
+                  </button>
+                  <span className="text-sm text-gray-600">
+                    Page {currentPage} of {totalPages}
+                  </span>
+                  <button
+                    onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                    disabled={currentPage === totalPages}
+                    className="px-3 py-1 text-sm border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {showUploadModal && (
+          <ModalPortal zIndex="z-[300]" className="items-start justify-center p-4">
+            <div
+              className="rounded-2xl shadow-2xl overflow-hidden max-w-6xl w-full border-0 max-h-[min(820px,calc(100vh-2rem))] flex flex-col"
+              style={{
+                background: 'rgba(255,255,255,0.72)',
+                backdropFilter: 'blur(20px) saturate(180%)',
+                WebkitBackdropFilter: 'blur(20px) saturate(180%)',
+              }}
+            >
+              <div className="bg-oracle-dark-gray px-5 py-4">
+                <div className="flex items-start gap-4">
+                  <div className="min-w-0">
+                    <h2 className="text-lg font-semibold text-white">Files</h2>
+                    <p className="mt-1 text-sm text-gray-200">{preparedUploadsSummary}</p>
+                  </div>
+
+                  <div className="ml-auto flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={closeUploadModal}
+                      className="p-1.5 rounded-lg hover:bg-white/10 transition-colors text-gray-200"
+                      aria-label="Close upload modal"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white px-6 pb-6 pt-4 flex flex-1 min-h-0 flex-col gap-4">
+                <input
+                  id="upload-rag-files-input"
+                  type="file"
+                  multiple
+                  accept=".pdf,.zip"
+                  onChange={handleFileSelect}
+                  className="hidden"
+                />
+
+                <div className="-mx-6 -mt-4 flex flex-1 min-h-0 flex-col overflow-hidden border-y border-gray-200 bg-white">
+                  <div className="border-b border-gray-200 bg-gray-50 px-4 py-3">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <label
+                          htmlFor="upload-rag-files-input"
+                          className={uploadDraftActionButtonClassName}
+                        >
+                          + Add files
+                        </label>
+
+                        <select
+                          value={selectedMetadataUploadId}
+                          onChange={(e) => handleExistingMetadataSelect(e.target.value)}
+                          disabled={metadataUploadsQuery.isLoading}
+                          className={uploadDraftMetadataSelectClassName}
+                          title="Select an existing metadata dataset"
+                        >
+                          <option value="">
+                            {metadataUploadsQuery.isLoading ? 'Loading metadata...' : 'Select metadata...'}
+                          </option>
+                          {(metadataUploadsQuery.data || []).map((dataset: MetadataUploadSummary) => (
+                            <option key={dataset.metadata_upload_id} value={dataset.metadata_upload_id}>
+                              {dataset.display_name || dataset.source_file_name} ({dataset.columns.length} cols)
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {hasPreparedUploads && (
+                        <div className="relative flex-1">
+                          <input
+                            type="text"
+                            value={uploadDraftFilter}
+                            onChange={(e) => setUploadDraftFilter(e.target.value)}
+                            placeholder="Filter by folder or document..."
+                            className="input-oracle w-full pr-10"
+                          />
+                          {uploadDraftFilter && (
+                            <button
+                              type="button"
+                              onClick={() => setUploadDraftFilter('')}
+                              className="absolute inset-y-0 right-2 flex items-center rounded-md px-2 text-oracle-light-gray transition-colors hover:text-oracle-dark-gray"
+                              aria-label="Clear upload filter"
+                            >
+                              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                              </svg>
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    <p className="mt-2 text-xs text-oracle-medium-gray">
+                      The first column must be exactly <code>file</code> and match the logical archive name without
+                      extension. Upload or update metadata from the Metadata module, then select it here.
+                      {selectedMetadataUpload ? (
+                        <>
+                          {' '}
+                          <span className="font-medium text-oracle-dark-gray">
+                            Metadata selected: {selectedMetadataLabel}.
+                          </span>
+                        </>
+                      ) : null}
+                      {hasMetadataSelection && totalPreparedItems > 0
+                        ? ` Current batch: ${metadataMatchedPreparedItems} matched, ${
+                            totalPreparedItems - metadataMatchedPreparedItems
+                          } without metadata.`
+                        : ''}
+                    </p>
+                  </div>
+
+                  {!hasPreparedUploads ? (
+                    prepareUploadMutation.isPending ? (
+                      <div className="flex flex-1 min-h-[280px] items-center justify-center px-6 py-12">
+                        <LoadingState
+                          size="md"
+                          label="Preparing files..."
+                          textClassName="text-oracle-medium-gray"
+                        />
+                      </div>
+                    ) : (
+                      <div className="flex flex-1 items-center p-6">
+                        <div
+                          className={`w-full border-2 border-dashed rounded-lg px-6 py-6 text-center transition-all cursor-pointer ${
+                            isDragging
+                              ? 'border-oracle-red bg-red-50'
+                              : 'border-gray-300 bg-gray-50 hover:bg-gray-100'
+                          }`}
+                          onDragEnter={handleDragOver}
+                          onDragLeave={handleDragLeave}
+                          onDragOver={handleDragOver}
+                          onDrop={handleDrop}
+                        >
+                          <div className="text-gray-600 mb-1">
+                            <strong>Drag and Drop</strong>
+                          </div>
+                          <div className="text-sm text-gray-500 mb-1">
+                            Select one or more PDF or ZIP files, or drop them here
+                          </div>
+                          <div className="text-xs text-gray-500 mb-2">
+                            ZIP uploads are expanded first so you can review metadata coverage, language, and access.
+                          </div>
+                          <label
+                            htmlFor="upload-rag-files-input"
+                            className="text-oracle-blue-link hover:underline text-sm cursor-pointer"
+                          >
+                            Select file(s)
+                          </label>
+                        </div>
+                      </div>
+                    )
+                  ) : (
+                    <>
+                      {filteredUploadDraftGroups.length > 0 && (
+                        <div className="hidden xl:grid grid-cols-[minmax(0,1fr)_450px] items-end gap-3 border-b border-gray-100 bg-gray-50 px-4 py-2 pl-16">
+                          <div />
+                          <div className={uploadDraftControlGridClassName}>
+                            <span className="text-[11px] font-semibold uppercase tracking-wide text-oracle-medium-gray">
+                              Metadata
+                            </span>
+                            <span className="text-[11px] font-semibold uppercase tracking-wide text-oracle-medium-gray">
+                              Language
+                            </span>
+                            <span className="text-[11px] font-semibold uppercase tracking-wide text-oracle-medium-gray">
+                              Access
+                            </span>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="min-h-0 flex-1 overflow-y-auto">
+                        {filteredUploadDraftGroups.length === 0 ? (
+                          <div className="px-4 py-8 text-center text-sm text-oracle-medium-gray">
+                            No prepared files match this filter.
+                          </div>
+                        ) : (
+                          filteredUploadDraftGroups.map(({ group, items, groupMatches }, groupIndex) => {
+                            const totalGroupItems = group.items.length;
+                            const enabledGroupItems = group.items.filter((item) => item.enabled).length;
+                            const isGroupCollapsed =
+                              hasUploadDraftFilter ? false : Boolean(collapsedUploadGroups[group.group_source_path]);
+                            const isGroupChecked = totalGroupItems > 0 && enabledGroupItems === totalGroupItems;
+
+                            return (
+                              <div
+                                key={group.group_source_path}
+                                className={groupIndex > 0 ? 'border-t border-gray-200' : ''}
+                              >
+                        <div className="flex items-center gap-3 px-4 py-1">
+                          <button
+                            type="button"
+                            onClick={() => toggleUploadDraftGroup(group.group_source_path)}
+                            className="inline-flex h-6 w-6 items-center justify-center rounded-md text-oracle-medium-gray transition-colors hover:bg-gray-100"
+                            aria-label={isGroupCollapsed ? 'Expand group' : 'Collapse group'}
+                          >
+                            <svg
+                              className={`h-4 w-4 transition-transform ${
+                                isGroupCollapsed ? '-rotate-90' : 'rotate-0'
+                              }`}
+                              fill="none"
+                              stroke="currentColor"
+                              viewBox="0 0 24 24"
+                            >
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                            </svg>
+                          </button>
+
+                          <input
+                            type="checkbox"
+                            checked={isGroupChecked}
+                            onChange={(e) =>
+                              updateUploadDraftGroupEnabled(group.group_source_path, e.target.checked)
+                            }
+                            className="h-4 w-4 rounded border-gray-300 text-oracle-red accent-oracle-red focus:ring-oracle-red"
+                          />
+
+                          <span className="text-oracle-medium-gray">
+                            <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"
+                              />
+                            </svg>
+                          </span>
+
+                          <button
+                            type="button"
+                            onClick={() => toggleUploadDraftGroup(group.group_source_path)}
+                            className="min-w-0 flex-1 text-left"
+                          >
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="truncate text-sm font-semibold text-oracle-dark-gray">
+                                {highlightText(group.group_name, uploadDraftFilter)}
+                              </span>
+                              <span className="inline-flex items-center rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-oracle-medium-gray">
+                                {formatUploadGroupKind(group.group_kind)}
+                              </span>
+                              {groupMatches && hasUploadDraftFilter && (
+                                <span className="inline-flex items-center rounded-full bg-yellow-100 px-2 py-0.5 text-[10px] font-medium text-yellow-800">
+                                  Match
+                                </span>
+                              )}
+                            </div>
+                          </button>
+
+                          <span className="shrink-0 text-xs font-medium text-oracle-medium-gray">
+                            {enabledGroupItems}/{totalGroupItems} selected
+                          </span>
+
+                          <button
+                            type="button"
+                            onClick={() => removeUploadDraftGroup(group.group_source_path)}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 text-red-600 transition-colors hover:bg-red-50"
+                            aria-label="Remove source"
+                          >
+                            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                              />
+                            </svg>
+                          </button>
+                        </div>
+
+                        {!isGroupCollapsed && (
+                          <>
+                          {items.map((item) => (
+                            <div
+                              key={getPreparedItemKey(item)}
+                              className={`border-t ${
+                                item.enabled
+                                  ? 'border-gray-100 bg-white'
+                                  : 'border-gray-100 bg-gray-50/70'
+                              }`}
+                            >
+                              <div className="px-4 py-1 pl-16">
+                                <div className={uploadDraftRowGridClassName}>
+                                  <div className="flex min-w-0 items-start gap-3 xl:items-center">
+                                    <input
+                                      type="checkbox"
+                                      checked={item.enabled}
+                                      onChange={(e) =>
+                                        updateUploadDraftItem(group.group_source_path, item.source_path, {
+                                          enabled: e.target.checked,
+                                        })
+                                      }
+                                      className="h-4 w-4 rounded border-gray-300 text-oracle-red accent-oracle-red focus:ring-oracle-red"
+                                    />
+
+                                    <span className="text-oracle-medium-gray">
+                                      <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path
+                                          strokeLinecap="round"
+                                          strokeLinejoin="round"
+                                          strokeWidth={2}
+                                          d="M7 3h7l5 5v13a1 1 0 01-1 1H7a2 2 0 01-2-2V5a2 2 0 012-2z"
+                                        />
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 3v5h5" />
+                                      </svg>
+                                    </span>
+
+                                    <div className="min-w-0 flex-1">
+                                      <div className="min-w-0">
+                                        <p
+                                          className="truncate text-sm font-medium text-oracle-dark-gray"
+                                          title={item.display_name || item.file_name}
+                                        >
+                                          {highlightText(item.display_name || item.file_name, uploadDraftFilter)}
+                                        </p>
+                                      </div>
+                                      {item.display_name !== item.file_name && (
+                                        <p
+                                          className="mt-1 truncate text-xs text-oracle-medium-gray"
+                                          title={item.file_name}
+                                        >
+                                          {highlightText(item.file_name, uploadDraftFilter)}
+                                        </p>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  <div className={uploadDraftControlGridClassName}>
+                                    <div className={compactUploadDraftFieldLabelClassName}>
+                                      <span className="text-[11px] font-semibold uppercase tracking-wide text-oracle-medium-gray xl:hidden">
+                                        Metadata
+                                      </span>
+                                      {(() => {
+                                        const metadataMatchState = getUploadDraftMetadataMatchState(
+                                          item.archive_slug
+                                        );
+                                        const metadataMatchPresentation =
+                                          getUploadDraftMetadataMatchPresentation(metadataMatchState);
+                                        const metadataMatchTitle =
+                                          metadataMatchState === 'matched'
+                                            ? `Matched metadata row for ${item.archive_slug}`
+                                            : metadataMatchState === 'unmatched'
+                                            ? `No metadata row matched ${item.archive_slug}`
+                                            : metadataMatchState === 'loading'
+                                            ? 'Loading metadata preview rows'
+                                            : 'Add or select metadata to preview matches';
+
+                                        return (
+                                          <span
+                                            className={`inline-flex h-7 w-full items-center justify-center rounded-md border px-2 text-[11px] font-medium ${metadataMatchPresentation.className}`}
+                                            title={metadataMatchTitle}
+                                          >
+                                            {metadataMatchPresentation.label}
+                                          </span>
+                                        );
+                                      })()}
+                                    </div>
+                                    <label className={compactUploadDraftFieldLabelClassName}>
+                                      <span className="text-[11px] font-semibold uppercase tracking-wide text-oracle-medium-gray xl:hidden">
+                                        Language
+                                      </span>
+                                      <select
+                                        value={item.document_language || DEFAULT_UPLOAD_LANGUAGE}
+                                        onChange={(e) =>
+                                          updateUploadDraftItem(group.group_source_path, item.source_path, {
+                                            document_language: e.target.value,
+                                          })
+                                        }
+                                        className={`${compactUploadDraftSelectClassName} w-full`}
+                                      >
+                                        {LANGUAGE_OPTIONS.map((option) => (
+                                          <option key={option.value} value={option.value}>
+                                            {option.label}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    </label>
+                                    <label className={compactUploadDraftFieldLabelClassName}>
+                                      <span className="text-[11px] font-semibold uppercase tracking-wide text-oracle-medium-gray xl:hidden">
+                                        Access
+                                      </span>
+                                      <select
+                                        value={item.access || DEFAULT_UPLOAD_ACCESS}
+                                        onChange={(e) =>
+                                          updateUploadDraftItem(group.group_source_path, item.source_path, {
+                                            access: e.target.value,
+                                          })
+                                        }
+                                        className={`${compactUploadDraftSelectClassName} w-full`}
+                                      >
+                                        {ACCESS_OPTIONS.map((option) => (
+                                          <option key={option.value} value={option.value}>
+                                            {option.label}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    </label>
+                                  </div>
+
+                                </div>
+                              </div>
+                            </div>
+                                  ))}
+                            </>
+                          )}
+                        </div>
+                              );
+                            })
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                <div className="flex shrink-0 gap-3 justify-end pt-2">
+                  <button type="button" onClick={closeUploadModal} className="btn-secondary">
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={submitUploadDraft}
+                    disabled={!canProcessUploadDraft}
+                    className="btn-primary"
+                  >
+                    {processUploadMutation.isPending
+                      ? 'Processing...'
+                      : prepareUploadMutation.isPending
+                      ? 'Preparing...'
+                      : 'Process files'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </ModalPortal>
+        )}
+
+        {replaceConfirm && (
+          <div className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50">
+            <div className="bg-white rounded-lg w-full max-w-md max-h-[min(80vh,720px)] overflow-hidden">
+              <div className="p-6 flex min-h-0 flex-1 flex-col">
+                <h2 className="text-lg font-bold text-oracle-dark-gray mb-2">Document already exists</h2>
+                <p className="text-sm text-oracle-medium-gray mb-4">
+                  A document with this name already exists ({replaceConfirm.duplicateDocs.length}):
+                </p>
+                <ul className="list-disc list-inside text-sm text-oracle-dark-gray mb-4 max-h-72 overflow-y-auto pr-2">
+                  {replaceConfirm.duplicateDocs.map((d: any) => (
+                    <li key={d.id}>{d.original_name || d.filename}</li>
+                  ))}
+                </ul>
+                <p className="text-sm text-oracle-medium-gray">
+                  Do you want to reprocess it? The existing document will be deleted and processed again.
+                </p>
+                <div className="mt-4 flex gap-2 justify-end border-t border-gray-100 pt-4">
+                  <button
+                    type="button"
+                    onClick={() => setReplaceConfirm(null)}
+                    className="btn-secondary"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const { duplicateDocs, groups } = replaceConfirm;
+                      const replaceFileIds = duplicateDocs
+                        .map((doc: any) => Number(doc.id))
+                        .filter((value) => Number.isFinite(value) && value > 0);
+                      void queueUploadDraft(groups, replaceFileIds);
+                    }}
+                    disabled={processUploadMutation.isPending}
+                    className="btn-primary"
+                  >
+                    {processUploadMutation.isPending
+                      ? 'Processing...'
+                      : 'Yes, reprocess'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {editingDocs && editingDocs.length > 0 && (
+          <EditDocumentModal
+            docs={editingDocs}
+            onClose={() => setEditingDocs(null)}
+            onSave={(data) => {
+              const fileIds = editingDocs
+                .map((doc) => Number(doc.id))
+                .filter((fileId) => Number.isFinite(fileId) && fileId > 0);
+              if (fileIds.length <= 1) {
+                const singleFileId = String(fileIds[0] || '');
+                updateMutation.mutate({ id: singleFileId, data });
+                return;
+              }
+              bulkUpdateMutation.mutate({ fileIds, data });
+            }}
+            isSaving={updateMutation.isPending || bulkUpdateMutation.isPending}
+          />
+        )}
+
+        {viewingDoc && (
+          <DocumentViewerModal
+            doc={viewingDoc}
+            onClose={() => setViewingDoc(null)}
+          />
+        )}
+
+        {deletingDocs && deletingDocs.length > 0 && (
+          <ConfirmDeleteModal
+            title={deletingDocs.length > 1 ? 'Delete documents' : 'Delete document'}
+            message={
+              <DeleteDocumentConfirmMessage
+                docNames={deletingDocs.map((doc) =>
+                  String(doc.original_name || doc.filename || '')
+                )}
+              />
+            }
+            detail={deletingDocs.length > 1 ? 'All selected documents will be removed.' : 'This action cannot be undone.'}
+            loading={deleteMutation.isPending || bulkDeleteMutation.isPending}
+            onConfirm={() => {
+              const fileIds = deletingDocs
+                .map((doc) => Number(doc.id))
+                .filter((fileId) => Number.isFinite(fileId) && fileId > 0);
+              if (fileIds.length <= 1) {
+                deleteMutation.mutate(String(fileIds[0] || ''), {
+                  onSuccess: () => setDeletingDocs(null),
+                  onError: () => setDeletingDocs(null),
+                });
+                return;
+              }
+              bulkDeleteMutation.mutate(fileIds, {
+                onSuccess: () => setDeletingDocs(null),
+                onError: () => setDeletingDocs(null),
+              });
+            }}
+            onCancel={() => setDeletingDocs(null)}
+          />
+        )}
+      </div>
+    </Layout>
+  );
+}
+
+function EditDocumentModal({
+  docs,
+  onClose,
+  onSave,
+  isSaving,
+}: {
+  docs: any[];
+  onClose: () => void;
+  onSave: (data: any) => void;
+  isSaving: boolean;
+}) {
+  const safeDocs = docs.length > 0 ? docs : [{}];
+  const primaryDoc = safeDocs[0];
+  const isBulkEdit = safeDocs.length > 1;
+  const [accessType, setAccessType] = useState<string>(
+    primaryDoc.access_profiles?.includes('private')
+      ? 'private'
+      : primaryDoc.access_profiles?.includes('all')
+      ? 'all'
+      : 'private'
+  );
+
+  useEffect(() => {
+    setAccessType(
+      primaryDoc.access_profiles?.includes('private')
+        ? 'private'
+        : primaryDoc.access_profiles?.includes('all')
+        ? 'all'
+        : 'private'
+    );
+  }, [primaryDoc]);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const finalProfiles: string[] = accessType === 'all' ? ['all'] : ['private'];
+    onSave({ access_profiles: finalProfiles });
+  };
+
+  return (
+    <ModalPortal zIndex="z-[300]" className="items-start justify-center p-4">
+      <div
+        className="rounded-2xl shadow-2xl overflow-hidden max-w-md w-full border-0"
+        style={{
+          background: 'rgba(255,255,255,0.72)',
+          backdropFilter: 'blur(20px) saturate(180%)',
+          WebkitBackdropFilter: 'blur(20px) saturate(180%)',
+        }}
+      >
+        <div className="px-5 py-4 flex items-center gap-3 bg-oracle-dark-gray">
+          <div className="min-w-0">
+            <h2 className="text-lg font-semibold text-white">
+              {isBulkEdit ? 'Edit Document Access' : 'Edit Document Access'}
+            </h2>
+            <p
+              className="text-xs text-gray-200 truncate"
+              title={
+                isBulkEdit
+                  ? `${safeDocs.length} selected documents`
+                  : primaryDoc.original_name || primaryDoc.filename
+              }
+            >
+              {isBulkEdit
+                ? `${safeDocs.length} selected documents`
+                : primaryDoc.original_name || primaryDoc.filename}
+            </p>
+          </div>
+          <div className="ml-auto" />
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1.5 rounded-lg hover:bg-white/10 transition-colors text-gray-200"
+            aria-label="Close edit document modal"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <div className="bg-white p-6">
+          <form onSubmit={handleSubmit}>
+          {/* Access Type */}
+          <div className="mb-5">
+            <label className="block text-sm font-medium text-oracle-dark-gray mb-3">Access Type</label>
+            <div className="grid grid-cols-2 gap-2">
+              <label
+                className={`flex flex-col items-center gap-2 p-3 rounded-lg border-2 cursor-pointer transition-all ${
+                  accessType === 'private'
+                    ? 'border-oracle-red bg-oracle-red/5'
+                    : 'border-oracle-border hover:border-oracle-red/50'
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="accessType"
+                  value="private"
+                  checked={accessType === 'private'}
+                  onChange={() => setAccessType('private')}
+                  className="sr-only"
+                />
+                <svg className={`w-6 h-6 ${accessType === 'private' ? 'text-oracle-red' : 'text-oracle-light-gray'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                </svg>
+                <span className={`text-xs font-medium ${accessType === 'private' ? 'text-oracle-red' : 'text-oracle-medium-gray'}`}>Private</span>
+              </label>
+              <label
+                className={`flex flex-col items-center gap-2 p-3 rounded-lg border-2 cursor-pointer transition-all ${
+                  accessType === 'all'
+                    ? 'border-oracle-red bg-oracle-red/5'
+                    : 'border-oracle-border hover:border-oracle-red/50'
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="accessType"
+                  value="all"
+                  checked={accessType === 'all'}
+                  onChange={() => setAccessType('all')}
+                  className="sr-only"
+                />
+                <svg className={`w-6 h-6 ${accessType === 'all' ? 'text-oracle-red' : 'text-oracle-light-gray'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <span className={`text-xs font-medium ${accessType === 'all' ? 'text-oracle-red' : 'text-oracle-medium-gray'}`}>All Users</span>
+              </label>
+            </div>
+          </div>
+
+          {/* Footer */}
+          <div className="-mx-6 -mb-6 mt-6 flex border-t border-gray-100">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={isSaving}
+              className="flex-1 py-4 text-sm font-medium text-oracle-medium-gray transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <div className="w-px bg-gray-100" />
+            <button
+              type="submit"
+              disabled={isSaving}
+              className="flex-1 bg-oracle-red py-4 text-sm font-semibold text-white transition-colors hover:bg-oracle-red/90 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isSaving ? 'Saving...' : 'Save'}
+            </button>
+          </div>
+          </form>
+        </div>
+      </div>
+    </ModalPortal>
+  );
+}
+
+function DocumentViewerModal({
+  doc,
+  onClose,
+}: {
+  doc: any;
+  onClose: () => void;
+}) {
+  const [pageImageUrl, setPageImageUrl] = useState<string | null>(null);
+  const [pageImageLoading, setPageImageLoading] = useState(false);
+  const [pageImageError, setPageImageError] = useState<string | null>(null);
+  const [markdownContent, setMarkdownContent] = useState<string>('');
+  const [markdownError, setMarkdownError] = useState<string | null>(null);
+  const [currentPreviewPage, setCurrentPreviewPage] = useState<number>(1);
+  const [loading, setLoading] = useState(true);
+  const { showToast } = useToast();
+
+  const markdownByPage = React.useMemo(() => {
+    const content = String(markdownContent || '');
+    const pageMap = new Map<number, string>();
+    const headingRegex = /^##\s+Page\s+(\d+)\s*$/gim;
+    const matches = Array.from(content.matchAll(headingRegex));
+    if (matches.length === 0) {
+      return pageMap;
+    }
+    for (let index = 0; index < matches.length; index += 1) {
+      const current = matches[index];
+      const next = matches[index + 1];
+      const pageNumber = Number(current[1]);
+      if (Number.isNaN(pageNumber) || pageNumber < 1 || current.index === undefined) continue;
+      const sectionStart = current.index + current[0].length;
+      const sectionEnd = next?.index ?? content.length;
+      const pageSection = content.slice(sectionStart, sectionEnd).trim();
+      pageMap.set(pageNumber, pageSection || '_No content available for this page._');
+    }
+    return pageMap;
+  }, [markdownContent]);
+
+  const totalPages = React.useMemo(() => {
+    const fromDoc = Number(doc?.pages || 0);
+    if (fromDoc > 0) return fromDoc;
+    if (markdownByPage.size === 0) return 1;
+    return Math.max(...Array.from(markdownByPage.keys()));
+  }, [doc?.pages, markdownByPage]);
+
+  const currentPageMarkdown = React.useMemo(() => {
+    if (markdownByPage.size === 0) {
+      return markdownContent;
+    }
+    return markdownByPage.get(currentPreviewPage) || '';
+  }, [markdownByPage, markdownContent, currentPreviewPage]);
+
+  const renderedPageMarkdown = React.useMemo(
+    () => {
+      return repairLooseMarkdownTables(currentPageMarkdown).trim();
+    },
+    [currentPageMarkdown]
+  );
+
+  useEffect(() => {
+    const loadDocument = async () => {
+      setLoading(true);
+      setMarkdownError(null);
+      try {
+        const mdResponse = await ragApi.getDocumentMarkdown(doc.id);
+        const markdown = String(mdResponse.data?.markdown ?? '');
+        setMarkdownContent(markdown);
+      } catch (error: any) {
+        const message =
+          error?.response?.data?.detail ||
+          error?.message ||
+          'Markdown extraction could not be loaded.';
+        setMarkdownContent('');
+        setMarkdownError(String(message));
+        showToast('Failed to load document Markdown', 'error');
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadDocument();
+    setCurrentPreviewPage(1);
+  }, [doc.id]);
+
+  useEffect(() => {
+    setCurrentPreviewPage((prev) => {
+      if (prev < 1) return 1;
+      if (prev > totalPages) return totalPages;
+      return prev;
+    });
+  }, [totalPages]);
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    const loadPageImage = async () => {
+      const fileId = Number(doc?.id);
+      if (!fileId || Number.isNaN(fileId) || currentPreviewPage < 1) {
+        setPageImageUrl(null);
+        setPageImageError('Page image is not available for this document.');
+        return;
+      }
+
+      setPageImageLoading(true);
+      setPageImageError(null);
+      try {
+        const response = await ragApi.getDocumentPageImage(fileId, currentPreviewPage);
+        const dataUri = String(response.data?.data_uri || '').trim();
+        if (!dataUri) {
+          throw new Error('Page image is empty.');
+        }
+        if (!isCancelled) {
+          setPageImageUrl(dataUri);
+        }
+      } catch {
+        if (!isCancelled) {
+          setPageImageUrl(null);
+          setPageImageError('No se pudo cargar la imagen renderizada de esta pagina.');
+        }
+      } finally {
+        if (!isCancelled) {
+          setPageImageLoading(false);
+        }
+      }
+    };
+
+    loadPageImage();
+    return () => {
+      isCancelled = true;
+    };
+  }, [doc?.id, currentPreviewPage]);
+
+  const copyMarkdown = () => {
+    if (markdownError) return;
+    navigator.clipboard.writeText(markdownContent);
+    showToast('Markdown copied to clipboard', 'success');
+  };
+
+  return (
+    <ModalPortal zIndex="z-[300]" className="items-start justify-center p-4">
+      <div
+        className="rounded-2xl shadow-2xl border border-white/20 overflow-hidden w-full max-w-6xl h-[84vh] flex flex-col border-0"
+        style={{
+          background: 'rgba(255, 255, 255, 0.72)',
+          backdropFilter: 'blur(20px) saturate(180%)',
+          WebkitBackdropFilter: 'blur(20px) saturate(180%)',
+        }}
+      >
+        <div className="px-5 py-4 flex items-center gap-3 bg-oracle-dark-gray flex-shrink-0">
+          <div className="flex items-center gap-3">
+            <div>
+              <h2 className="text-lg font-semibold text-white">{doc.original_name || doc.filename}</h2>
+              <p className="text-sm text-gray-200">{doc.pages || 0} pages</p>
+            </div>
+          </div>
+          <div className="ml-auto" />
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg hover:bg-white/10 transition-colors text-gray-200"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Content */}
+        {loading ? (
+          <div className="flex-1 flex items-center justify-center h-full bg-white">
+            <LoadingState size="sm" label="Loading document..." textClassName="text-oracle-medium-gray" />
+          </div>
+        ) : (
+          <div className="flex-1 grid grid-cols-2 gap-0 min-h-0 overflow-hidden">
+            {/* Left: rendered page image */}
+            <div className="flex flex-col border-r border-oracle-border overflow-hidden">
+              <div className="flex items-center justify-between py-2 px-4 min-h-[46px] border-b border-oracle-border bg-gray-50 flex-shrink-0">
+                <span className="text-sm font-medium text-oracle-dark-gray">Page Image Preview</span>
+                <span className="text-xs text-oracle-light-gray">
+                  Page {currentPreviewPage} / {totalPages}
+                </span>
+              </div>
+              <div className="flex-1 min-h-0 overflow-auto bg-white">
+                {pageImageLoading ? (
+                  <div className="m-4 flex h-[calc(100%-2rem)] min-h-[320px] items-center justify-center rounded-xl border border-dashed border-gray-300 bg-white">
+                    <LoadingState size="sm" label="Loading page image..." textClassName="text-oracle-medium-gray" />
+                  </div>
+                ) : pageImageUrl ? (
+                  <div className="flex min-h-full items-start justify-center bg-white">
+                    <img
+                      src={pageImageUrl}
+                      alt={`Rendered page ${currentPreviewPage}`}
+                      className="block w-full max-w-none bg-white"
+                    />
+                  </div>
+                ) : (
+                  <div className="m-4 flex h-[calc(100%-2rem)] min-h-[320px] items-center justify-center rounded-xl border border-dashed border-gray-300 bg-white px-6 text-center">
+                    <div>
+                      <p className="text-sm font-medium text-oracle-dark-gray">Preview unavailable</p>
+                      <p className="mt-1 text-xs leading-5 text-oracle-light-gray">
+                        {pageImageError || 'The rendered page image was not generated for this page.'}
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Right: Markdown Viewer */}
+            <div className="flex flex-col overflow-hidden">
+              <div className="flex items-center justify-between py-2 px-4 min-h-[46px] border-b border-oracle-border bg-gray-50 flex-shrink-0">
+                <span className="text-sm font-medium text-oracle-dark-gray">Markdown Content</span>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => setCurrentPreviewPage((prev) => Math.max(1, prev - 1))}
+                    disabled={currentPreviewPage <= 1}
+                    className="p-1.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                    title="Previous page"
+                    aria-label="Previous page"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                    </svg>
+                  </button>
+                  <button
+                    onClick={() => setCurrentPreviewPage((prev) => Math.min(totalPages, prev + 1))}
+                    disabled={currentPreviewPage >= totalPages}
+                    className="p-1.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                    title="Next page"
+                    aria-label="Next page"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    </svg>
+                  </button>
+                  <button
+                    onClick={copyMarkdown}
+                    disabled={Boolean(markdownError)}
+                    className="p-1.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed"
+                    title="Copy Markdown"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+              <div className="flex-1 min-h-0 overflow-auto bg-white p-3">
+                {markdownError ? (
+                  <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm leading-6 text-red-800">
+                    {markdownError}
+                  </div>
+                ) : (
+                  <div className="prose prose-sm max-w-none text-[13px] leading-5 text-oracle-dark-gray [&_h1]:mb-2 [&_h1]:mt-4 [&_h1]:text-lg [&_h1]:font-bold [&_h2]:mb-2 [&_h2]:mt-3 [&_h2]:border-b [&_h2]:border-gray-200 [&_h2]:pb-1 [&_h2]:text-base [&_h2]:font-semibold [&_h3]:mb-2 [&_h3]:mt-0 [&_h3]:border-b [&_h3]:border-gray-200 [&_h3]:pb-1.5 [&_h3]:text-[13px] [&_h3]:font-semibold [&_h3]:uppercase [&_h3]:tracking-wide [&_h3]:text-oracle-medium-gray [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-0.5 [&_strong]:font-semibold [&_code]:rounded [&_code]:bg-gray-100 [&_code]:px-1 [&_code]:text-sm [&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-gray-100 [&_pre]:p-3 [&_pre]:text-sm [&_blockquote]:border-l-4 [&_blockquote]:border-gray-300 [&_blockquote]:pl-4 [&_blockquote]:italic [&_blockquote]:text-gray-600">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={DOCUMENT_MARKDOWN_COMPONENTS}>
+                      {renderedPageMarkdown}
+                    </ReactMarkdown>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </ModalPortal>
+  );
+}

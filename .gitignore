@@ -1,0 +1,50 @@
+# Root workspace ignores for public repo publishing
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+dist/
+npm-debug.log*
+
+# Local runtime / secrets
+.env
+.env.*
+!.env.example
+.venv/
+apps/backend/.env
+apps/backend/.venv/
+apps/backend/wallet/
+apps/backend/keys/
+apps/backend/data/
+apps/backend/logs/
+apps/backend/.pytest_cache/
+apps/frontend/node_modules/
+apps/frontend/dist/
+apps/frontend/logs/
+
+# Local scratch / reports
+.source/
+.playwright-cli/
+.playwright-runner/
+build/
+output/
+test-results/
+*.log
+*.out.log
+*.err.log
+apps/backend/tests/reports/
+oci/
+scripts/
+tests_docs/
+RUN_LOG.md

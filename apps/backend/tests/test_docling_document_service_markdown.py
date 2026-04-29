@@ -1,0 +1,26 @@
+import json
+
+from apps.backend.app.ingest.docling_document_service import DoclingDocumentService
+
+
+def test_docling_page_result_reconstructs_markdown_when_page_export_is_empty() -> None:
+    bucket = DoclingDocumentService._build_page_bucket(page=object())
+    bucket["text_fragments"].extend(
+        [
+            "Contrato de servidumbre",
+            "Comparecen las partes para suscribir el acuerdo.",
+        ]
+    )
+    bucket["detected_blocks"].append({"type": "TextItem", "page_number": 2})
+
+    page_result = DoclingDocumentService._build_page_result(
+        page_number=2,
+        bucket=bucket,
+        total_pages=3,
+    )
+
+    assert "Contrato de servidumbre" in page_result.ocr_result.markdown_text
+    assert "Comparecen las partes" in page_result.ocr_result.markdown_text
+    assert "markdown_reconstructed_from_ocr" in page_result.visual_flags
+    layout_payload = json.loads(page_result.layout_json)
+    assert layout_payload["markdown_source"] == "ocr_text_reconstruction"
