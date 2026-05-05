@@ -17,6 +17,14 @@ type ImprovementTab = 'traces' | 'evals' | 'feedback' | 'checkpoints';
 
 const CHECKPOINTS_PAGE_SIZE = 10;
 const EVAL_CASES_PAGE_SIZE = 10;
+const DEFAULT_EVAL_CATEGORY = 'manual';
+const EVAL_CATEGORY_OPTIONS = [
+  { value: 'manual', label: 'Manual' },
+  { value: 'regression', label: 'Regression' },
+  { value: 'smoke', label: 'Smoke' },
+  { value: 'negative', label: 'Negative' },
+  { value: 'document_quality', label: 'Document quality' },
+];
 
 function formatDateTime(value: string): string {
   const date = new Date(value);
@@ -48,6 +56,14 @@ function compactJson(value: unknown): string {
   } catch {
     return String(value ?? '');
   }
+}
+
+function formatEvalCategory(value: string): string {
+  const option = EVAL_CATEGORY_OPTIONS.find((item) => item.value === value);
+  if (option) return option.label;
+  return String(value || 'Manual')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 function StatusPill({ value }: { value: string }) {
@@ -86,7 +102,7 @@ export function ContinuousImprovement() {
   const [selectedTraceId, setSelectedTraceId] = useState('');
   const [selectedCaseIds, setSelectedCaseIds] = useState<number[]>([]);
   const [caseName, setCaseName] = useState('');
-  const [caseCategory, setCaseCategory] = useState('regression');
+  const [caseCategory, setCaseCategory] = useState(DEFAULT_EVAL_CATEGORY);
   const [caseQuestion, setCaseQuestion] = useState('');
   const [caseTerms, setCaseTerms] = useState('');
   const [minimumCitations, setMinimumCitations] = useState(1);
@@ -150,6 +166,7 @@ export function ContinuousImprovement() {
       }),
     onSuccess: () => {
       setCaseName('');
+      setCaseCategory(DEFAULT_EVAL_CATEGORY);
       setCaseQuestion('');
       setCaseTerms('');
       setMinimumCitations(1);
@@ -468,7 +485,9 @@ export function ContinuousImprovement() {
                               <p className="font-medium text-oracle-dark-gray">{evalCase.name}</p>
                               <p className="mt-1 line-clamp-2 text-xs text-oracle-medium-gray">{evalCase.question}</p>
                             </td>
-                            <td className="px-4 py-3 text-xs text-oracle-medium-gray">{evalCase.category}</td>
+                            <td className="px-4 py-3 text-xs text-oracle-medium-gray">
+                              {formatEvalCategory(evalCase.category)}
+                            </td>
                             <td className="px-4 py-3 text-xs text-oracle-medium-gray">{evalCase.source}</td>
                           </tr>
                         ))}
@@ -760,12 +779,21 @@ export function ContinuousImprovement() {
                     <label htmlFor="eval-case-category" className="block text-xs font-semibold uppercase tracking-wide text-oracle-light-gray">
                       Category
                     </label>
-                    <input
+                    <select
                       id="eval-case-category"
                       className="input-oracle mt-1"
                       value={caseCategory}
                       onChange={(event) => setCaseCategory(event.target.value)}
-                    />
+                    >
+                      {EVAL_CATEGORY_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="mt-1 text-xs text-oracle-light-gray">
+                      Groups the case for review; it does not change retrieval.
+                    </p>
                   </div>
                   <div>
                     <label htmlFor="eval-case-question" className="block text-xs font-semibold uppercase tracking-wide text-oracle-light-gray">
@@ -780,7 +808,7 @@ export function ContinuousImprovement() {
                   </div>
                   <div>
                     <label htmlFor="eval-case-terms" className="block text-xs font-semibold uppercase tracking-wide text-oracle-light-gray">
-                      Must include terms
+                      Expected terms
                     </label>
                     <input
                       id="eval-case-terms"
@@ -789,6 +817,9 @@ export function ContinuousImprovement() {
                       onChange={(event) => setCaseTerms(event.target.value)}
                       placeholder="comma separated"
                     />
+                    <p className="mt-1 text-xs text-oracle-light-gray">
+                      Optional words or phrases that should appear in a passing answer.
+                    </p>
                   </div>
                   <div>
                     <label htmlFor="eval-case-minimum-citations" className="block text-xs font-semibold uppercase tracking-wide text-oracle-light-gray">

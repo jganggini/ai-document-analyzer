@@ -72,6 +72,38 @@ _LEXICAL_SCAN_STOPWORDS = {
     "una",
     "y",
 }
+_FILE_LOOKUP_EXTENSION_RE = re.compile(r"\.[A-Za-z0-9]{1,12}$")
+_FILE_LOOKUP_SEPARATOR_RE = re.compile(r"[^0-9a-z]+")
+_FILE_LOOKUP_VOWEL_RE = re.compile(r"[aeiou]")
+
+
+def _file_lookup_base(value: str | None) -> str:
+    normalized = str(value or "").strip().strip("`\"'")
+    if not normalized:
+        return ""
+    normalized = normalized.replace("\\", "/").rstrip("/")
+    normalized = normalized.rsplit("/", 1)[-1]
+    normalized = _FILE_LOOKUP_EXTENSION_RE.sub("", normalized)
+    normalized = unicodedata.normalize("NFKD", normalized)
+    normalized = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    return normalized.casefold()
+
+
+def _file_lookup_primary_keys(value: str | None) -> set[str]:
+    base = _file_lookup_base(value)
+    if not base:
+        return set()
+    spaced = " ".join(part for part in _FILE_LOOKUP_SEPARATOR_RE.split(base) if part)
+    compact = _FILE_LOOKUP_SEPARATOR_RE.sub("", base)
+    return {key for key in (spaced, compact) if key}
+
+
+def _file_lookup_signature(value: str | None) -> str:
+    compact = _FILE_LOOKUP_SEPARATOR_RE.sub("", _file_lookup_base(value))
+    if len(compact) < 8:
+        return ""
+    signature = _FILE_LOOKUP_VOWEL_RE.sub("", compact)
+    return signature if len(signature) >= 6 else ""
 
 
 def _normalize_lexical_scan_text(value: str | None) -> str:
@@ -1004,15 +1036,8 @@ class FileRepository:
         cursor = connection.cursor()
         try:
             params: dict[str, Any] = {"user_id": int(user_id)}
-            name_placeholders: list[str] = []
-            for index, file_name in enumerate(safe_file_names):
-                key = f"file_name_{index}"
-                params[key] = file_name.lower()
-                name_placeholders.append(f":{key}")
-
             where_conditions = [
                 self._file_access_condition(include_shared=include_shared),
-                f"LOWER(file_input_file_name) IN ({', '.join(name_placeholders)})",
             ]
             safe_file_ids = self._dedupe_positive_ids(file_ids)
             if safe_file_ids:
@@ -1025,14 +1050,44 @@ class FileRepository:
 
             cursor.execute(
                 f"""
-                SELECT file_id
+                SELECT file_id, file_input_file_name
                 FROM files
                 WHERE {' AND '.join(where_conditions)}
                 ORDER BY file_id
                 """,
                 params,
             )
-            return [int(row[0]) for row in cursor.fetchall()]
+            rows = [
+                (int(row[0]), str(self._read_lob(row[1]) or ""))
+                for row in cursor.fetchall()
+                if int(row[0]) > 0
+            ]
+            input_primary_keys: set[str] = set()
+            input_signatures: set[str] = set()
+            for file_name in safe_file_names:
+                input_primary_keys.update(_file_lookup_primary_keys(file_name))
+                signature = _file_lookup_signature(file_name)
+                if signature:
+                    input_signatures.add(signature)
+
+            matched_ids: set[int] = set()
+            for file_id, stored_file_name in rows:
+                if input_primary_keys & _file_lookup_primary_keys(stored_file_name):
+                    matched_ids.add(file_id)
+
+            if input_signatures:
+                rows_by_signature: dict[str, list[int]] = {}
+                for file_id, stored_file_name in rows:
+                    signature = _file_lookup_signature(stored_file_name)
+                    if not signature:
+                        continue
+                    rows_by_signature.setdefault(signature, []).append(file_id)
+                for signature in input_signatures:
+                    signature_file_ids = rows_by_signature.get(signature, [])
+                    if len(signature_file_ids) == 1:
+                        matched_ids.add(signature_file_ids[0])
+
+            return [file_id for file_id, _ in rows if file_id in matched_ids]
         finally:
             cursor.close()
             connection.close()
