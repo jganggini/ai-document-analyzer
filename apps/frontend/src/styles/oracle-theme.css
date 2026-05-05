@@ -671,6 +671,29 @@ body {
     0 1px 0 rgba(255, 255, 255, 0.9) inset !important;
 }
 
+.chat-markdown-table-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(77, 77, 77, 0.38) transparent;
+}
+
+.chat-markdown-table-scroll::-webkit-scrollbar {
+  height: 0.5rem;
+}
+
+.chat-markdown-table-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.chat-markdown-table-scroll::-webkit-scrollbar-thumb {
+  background: rgba(77, 77, 77, 0.32);
+  border: 2px solid #ffffff;
+  border-radius: 999px;
+}
+
+.chat-markdown-table-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(77, 77, 77, 0.48);
+}
+
 .app-shell-dark .chat-composer-footer {
   background:
     radial-gradient(circle at 2rem 50%, rgba(199, 70, 52, 0.12), transparent 6.75rem),

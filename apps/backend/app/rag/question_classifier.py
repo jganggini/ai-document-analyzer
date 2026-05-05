@@ -106,7 +106,44 @@ class QuestionClassifier:
         )
 
     @classmethod
+    def _contains_content_filtered_document_selection(cls, *, normalized: str) -> bool:
+        if not cls._contains_any(
+            normalized=normalized,
+            terms=("documento", "documentos", "archivo", "archivos", "pdf", "pdfs", "file", "files"),
+        ):
+            return False
+        selection_pattern = (
+            r"\b(?:que|cuales|lista|listame|muestra|muestrame|identifica|encuentra|"
+            r"busca|filtra|dime|indica|which|what|list|show|find|identify)\b"
+            r".{0,80}\b(?:documentos?|archivos?|pdfs?|files?)\b"
+        )
+        relative_selection_pattern = r"\b(?:documentos?|archivos?|pdfs?|files?)\b\s+(?:que|that|which)\b"
+        if not (
+            re.search(selection_pattern, normalized)
+            or re.search(relative_selection_pattern, normalized)
+        ):
+            return False
+        content_verb_pattern = (
+            r"\b(?:documentos?|archivos?|pdfs?|files?)\b.{0,90}\b"
+            r"(?:habla|hablan|trate|tratan|trata|menciona|mencionan|contiene|contienen|"
+            r"incluye|incluyen|describe|describen|explica|explican|refiere|refieren|"
+            r"aborda|abordan|cubre|cubren|mention|mentions|contain|contains|cover|covers|"
+            r"discuss|discusses|describe|describes)\b"
+        )
+        topic_connector_pattern = (
+            r"\b(?:documentos?|archivos?|pdfs?|files?)\b.{0,90}\b"
+            r"(?:sobre|acerca de|respecto de|respecto a|referente a|en relacion con|"
+            r"relacionad[oa]s con|vinculad[oa]s con|about|regarding|related to)\b"
+        )
+        return bool(
+            re.search(content_verb_pattern, normalized)
+            or re.search(topic_connector_pattern, normalized)
+        )
+
+    @classmethod
     def _contains_document_content_request(cls, *, normalized: str) -> bool:
+        if cls._contains_content_filtered_document_selection(normalized=normalized):
+            return True
         source_requested = cls._contains_any(
             normalized=normalized,
             terms=(
@@ -262,6 +299,8 @@ class QuestionClassifier:
             "archivos relacionados",
         )
         explicit_listing_requested = cls._contains_any(normalized=normalized, terms=explicit_phrases)
+        if cls._contains_content_filtered_document_selection(normalized=normalized):
+            return False
         if cls._contains_any(
             normalized=normalized,
             terms=(

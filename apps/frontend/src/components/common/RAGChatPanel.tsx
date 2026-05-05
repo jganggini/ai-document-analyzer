@@ -953,8 +953,8 @@ function messageContainsMarkdownTable(value: string): boolean {
 
 function ChatMarkdownTable({ children }: ComponentPropsWithoutRef<'table'>) {
   return (
-    <div className="not-prose my-3 max-w-full overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
-      <table className="min-w-[760px] w-full table-auto border-collapse text-left text-xs [&_td:nth-child(1)]:min-w-[10rem] [&_td:nth-child(2)]:min-w-[18rem] [&_td:nth-child(3)]:min-w-[7rem] [&_td:nth-child(4)]:min-w-[18rem] [&_th:nth-child(1)]:min-w-[10rem] [&_th:nth-child(2)]:min-w-[18rem] [&_th:nth-child(3)]:min-w-[7rem] [&_th:nth-child(4)]:min-w-[18rem]">
+    <div className="chat-markdown-table-scroll not-prose my-3 w-full max-w-full overflow-x-auto overscroll-x-contain rounded-xl border border-gray-200 bg-white shadow-sm">
+      <table className="w-max min-w-full table-auto border-collapse text-left text-xs text-oracle-dark-gray [&_tbody_tr:nth-child(even)]:bg-gray-50/60">
         {children}
       </table>
     </div>
@@ -975,7 +975,7 @@ function ChatMarkdownTh({ children }: ComponentPropsWithoutRef<'th'>) {
 
 function ChatMarkdownTd({ children }: ComponentPropsWithoutRef<'td'>) {
   return (
-    <td className="border-t border-gray-100 px-4 py-3 align-top leading-5 whitespace-normal break-words text-oracle-medium-gray">
+    <td className="min-w-[7rem] max-w-[28rem] border-t border-gray-100 px-4 py-3 align-top leading-5 whitespace-normal break-words text-oracle-medium-gray">
       {children}
     </td>
   );
@@ -3075,7 +3075,7 @@ export function RAGChatPanel() {
                     m.role === 'assistant' && messageContainsMarkdownTable(m.text);
                   const messageWidthClass =
                     m.role === 'assistant' && assistantHasMarkdownTable
-                      ? 'w-full max-w-full'
+                      ? 'flex-1 max-w-full'
                       : 'max-w-[85%]';
                   const userMessagePresentation =
                     m.role === 'user'
@@ -3092,7 +3092,7 @@ export function RAGChatPanel() {
                   return (
                     <div
                       key={m.messageId}
-                      className={`flex gap-2.5 ${m.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}
+                      className={`flex min-w-0 gap-2.5 ${m.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}
                     >
                     {m.role === 'assistant' ? (
                       <div className="w-8 h-8 rounded-xl bg-oracle-red flex items-center justify-center flex-shrink-0 overflow-hidden mt-0.5">
@@ -3124,12 +3124,14 @@ export function RAGChatPanel() {
                       </div>
 
                       <div
-                        className={`rounded-2xl px-4 py-2.5 text-sm leading-relaxed shadow-sm ${
+                        className={`max-w-full rounded-2xl px-4 py-2.5 text-sm leading-relaxed shadow-sm ${
                           m.role === 'user'
                             ? 'bg-oracle-dark-gray text-white rounded-tr-sm'
                             : m.error
                             ? 'bg-red-50 text-red-700 border border-red-200 rounded-tl-sm'
-                            : 'chat-assistant-message bg-white text-oracle-dark-gray border border-gray-200 rounded-tl-sm overflow-hidden'
+                            : `chat-assistant-message bg-white text-oracle-dark-gray border border-gray-200 rounded-tl-sm overflow-hidden ${
+                                assistantHasMarkdownTable ? 'w-full' : ''
+                              }`
                         }`}
                       >
                         {m.role === 'user' && userMessagePresentation ? (

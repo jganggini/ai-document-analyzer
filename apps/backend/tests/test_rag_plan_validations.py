@@ -937,6 +937,24 @@ def test_question_classifier_detects_associated_documents_request() -> None:
     assert result.question_class == "inventory"
 
 
+def test_question_classifier_routes_content_filtered_document_selection_to_synthesis() -> None:
+    classifier = QuestionClassifier()
+
+    result = classifier.classify(question="Que documentos hablan sobre atraso de renta?")
+
+    assert result.question_class == "exhaustive_synthesis"
+    assert result.rationale == "document-content-request"
+
+
+def test_question_classifier_does_not_treat_content_filtered_list_as_inventory() -> None:
+    classifier = QuestionClassifier()
+
+    result = classifier.classify(question="Lista los documentos que mencionan cumplimiento operativo.")
+
+    assert result.question_class == "exhaustive_synthesis"
+    assert result.rationale == "document-content-request"
+
+
 def test_question_classifier_routes_key_value_document_follow_up_to_document_synthesis() -> None:
     classifier = QuestionClassifier()
     result = classifier.classify(
@@ -1448,6 +1466,44 @@ def test_question_fact_resolver_returns_document_inventory_from_files_repository
     assert "| 2 | RM797_ID_1668 | RM797_contrato.pdf | RM797 | processing | 12 |" in resolution.answer_override
     assert resolution.facts_used_count == 2
     assert file_repository.include_shared_calls == [True]
+
+
+def test_question_fact_resolver_routes_content_filtered_document_selection_to_retrieval() -> None:
+    file_repository = _RecordingInventoryFileRepository(
+        [
+            {
+                "file_id": 201,
+                "archive_slug": "OP100_ID_1",
+                "file_input_file_name": "OP100_manual.pdf",
+                "file_code": "OP100",
+                "file_state": 3,
+                "file_page_count": 18,
+            },
+            {
+                "file_id": 202,
+                "archive_slug": "OP200_ID_2",
+                "file_input_file_name": "OP200_anexo.pdf",
+                "file_code": "OP200",
+                "file_state": 3,
+                "file_page_count": 9,
+            },
+        ]
+    )
+    resolver = QuestionFactResolver(repository=object(), file_repository=file_repository)
+
+    resolution = resolver.resolve(
+        question_class="inventory",
+        question="Lista los documentos que mencionan cumplimiento operativo.",
+        user_id=7,
+        file_ids=[201, 202],
+    )
+
+    assert resolution.answer_override is None
+    assert resolution.narrowed_file_ids == [201, 202]
+    assert resolution.document_phase_required is True
+    assert resolution.answerability_route == "documents_only"
+    assert "Documentos disponibles" not in resolution.fact_context_text
+    assert file_repository.include_shared_calls == []
 
 
 def test_question_fact_resolver_prefers_associated_documents_over_inherited_metadata_field() -> None:

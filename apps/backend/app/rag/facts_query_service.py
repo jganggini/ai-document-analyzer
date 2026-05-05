@@ -371,6 +371,20 @@ class QuestionFactResolver:
         metadata_file_ids = [row.file_id for row in metadata_rows if int(row.file_id) > 0]
         effective_metadata_file_ids = metadata_file_ids or list(file_ids or [])
 
+        content_filtered_document_selection = self._question_requests_content_filtered_document_selection(question)
+        if content_filtered_document_selection:
+            scoped_file_ids = [int(file_id) for file_id in list(file_ids or []) if int(file_id) > 0]
+            return FactResolution(
+                narrowed_file_ids=scoped_file_ids,
+                fact_context_text="",
+                facts_used_count=0,
+                confidence_notes=[
+                    "Document inventory was not used as a final answer because the question filters documents by content."
+                ],
+                document_phase_required=True,
+                answerability_route="documents_only",
+            )
+
         if question_class == "inventory" or self._question_requests_document_inventory_listing(question):
             return self._resolve_inventory(
                 question=question,
@@ -1932,9 +1946,49 @@ class QuestionFactResolver:
         )
 
     @classmethod
+    def _question_requests_content_filtered_document_selection(cls, question: str) -> bool:
+        normalized = cls._normalize_text(question)
+        if not normalized:
+            return False
+        if not any(
+            token in normalized
+            for token in ("documento", "documentos", "archivo", "archivos", "pdf", "pdfs", "file", "files")
+        ):
+            return False
+        selection_pattern = (
+            r"\b(?:que|cuales|lista|listame|muestra|muestrame|identifica|encuentra|"
+            r"busca|filtra|dime|indica|which|what|list|show|find|identify)\b"
+            r".{0,80}\b(?:documentos?|archivos?|pdfs?|files?)\b"
+        )
+        relative_selection_pattern = r"\b(?:documentos?|archivos?|pdfs?|files?)\b\s+(?:que|that|which)\b"
+        if not (
+            re.search(selection_pattern, normalized)
+            or re.search(relative_selection_pattern, normalized)
+        ):
+            return False
+        content_verb_pattern = (
+            r"\b(?:documentos?|archivos?|pdfs?|files?)\b.{0,90}\b"
+            r"(?:habla|hablan|trate|tratan|trata|menciona|mencionan|contiene|contienen|"
+            r"incluye|incluyen|describe|describen|explica|explican|refiere|refieren|"
+            r"aborda|abordan|cubre|cubren|mention|mentions|contain|contains|cover|covers|"
+            r"discuss|discusses|describe|describes)\b"
+        )
+        topic_connector_pattern = (
+            r"\b(?:documentos?|archivos?|pdfs?|files?)\b.{0,90}\b"
+            r"(?:sobre|acerca de|respecto de|respecto a|referente a|en relacion con|"
+            r"relacionad[oa]s con|vinculad[oa]s con|about|regarding|related to)\b"
+        )
+        return bool(
+            re.search(content_verb_pattern, normalized)
+            or re.search(topic_connector_pattern, normalized)
+        )
+
+    @classmethod
     def _question_requests_document_inventory(cls, question: str) -> bool:
         normalized = cls._normalize_text(question)
         if not normalized:
+            return False
+        if cls._question_requests_content_filtered_document_selection(question):
             return False
         if cls._inventory_request_requires_document_reasoning(question):
             return True
@@ -1975,7 +2029,11 @@ class QuestionFactResolver:
     @classmethod
     def _question_requests_document_inventory_listing(cls, question: str) -> bool:
         normalized = cls._normalize_text(question)
-        if not normalized or cls._inventory_request_requires_document_reasoning(question):
+        if (
+            not normalized
+            or cls._question_requests_content_filtered_document_selection(question)
+            or cls._inventory_request_requires_document_reasoning(question)
+        ):
             return False
         if any(
             token in normalized
