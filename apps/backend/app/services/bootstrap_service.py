@@ -72,16 +72,16 @@ class SetupService:
             return ""
         key_file_path = Path(raw_value)
         backend_root = self._resolve_backend_root()
-        fallback_candidate = (backend_root / "keys" / PureWindowsPath(raw_value).name).resolve()
+        bundled_key_candidate = (backend_root / "keys" / PureWindowsPath(raw_value).name).resolve()
         if key_file_path.is_absolute():
             if key_file_path.exists():
                 return str(key_file_path)
-            if fallback_candidate.exists():
-                return str(fallback_candidate)
+            if bundled_key_candidate.exists():
+                return str(bundled_key_candidate)
             return str(key_file_path)
         windows_path = PureWindowsPath(raw_value)
         if windows_path.drive:
-            return str(fallback_candidate)
+            return str(bundled_key_candidate)
         return str((backend_root / raw_value).resolve())
 
     def _write_oci_cli_config_file(self, *, config_values: dict[str, str]) -> None:

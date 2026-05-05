@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 import re
 import time
 import unicodedata
@@ -58,6 +59,50 @@ VISUAL_HINT_TERMS = (
     "row",
 )
 
+QUERY_CONCEPT_STOPWORDS = {
+    "a",
+    "al",
+    "an",
+    "and",
+    "archivo",
+    "archivos",
+    "con",
+    "contiene",
+    "contienen",
+    "cual",
+    "cuales",
+    "de",
+    "del",
+    "documento",
+    "documentos",
+    "el",
+    "en",
+    "esta",
+    "este",
+    "habla",
+    "hablan",
+    "indica",
+    "indican",
+    "la",
+    "lista",
+    "listar",
+    "las",
+    "los",
+    "menciona",
+    "mencionan",
+    "o",
+    "or",
+    "para",
+    "por",
+    "que",
+    "se",
+    "sobre",
+    "the",
+    "un",
+    "una",
+    "y",
+}
+
 
 def _normalize_text(value: str) -> str:
     normalized = unicodedata.normalize("NFKD", value or "")
@@ -81,6 +126,102 @@ def token_jaccard_similarity(left: list[str], right: list[str]) -> float:
     if not union:
         return 0.0
     return len(left_set & right_set) / len(union)
+
+
+def extract_query_concepts(question: str) -> list[str]:
+    seen: set[str] = set()
+    concepts: list[str] = []
+    for token in tokenize_text(question):
+        if len(token) < 3 or token in QUERY_CONCEPT_STOPWORDS or token in seen:
+            continue
+        seen.add(token)
+        concepts.append(token)
+    return concepts
+
+
+def token_match_keys(token: str) -> set[str]:
+    normalized = _normalize_text(token)
+    if not normalized or " " in normalized:
+        return set()
+    keys = {normalized}
+    if len(normalized) > 4 and normalized.endswith("s"):
+        keys.add(normalized[:-1])
+    for suffix in (
+        "aciones",
+        "acion",
+        "ando",
+        "iendo",
+        "ados",
+        "adas",
+        "idos",
+        "idas",
+        "ado",
+        "ada",
+        "ido",
+        "ida",
+        "ar",
+        "er",
+        "ir",
+    ):
+        if len(normalized) > len(suffix) + 3 and normalized.endswith(suffix):
+            keys.add(normalized[: -len(suffix)])
+            break
+    if len(normalized) > 5 and normalized[-1] in {"a", "e", "o"}:
+        keys.add(normalized[:-1])
+    return {key for key in keys if len(key) >= 3}
+
+
+def build_token_match_index(tokens: list[str]) -> set[str]:
+    indexed: set[str] = set()
+    for token in tokens:
+        indexed.update(token_match_keys(token))
+    return indexed
+
+
+def token_keys_are_related(left: str, right: str) -> bool:
+    left_value = _normalize_text(left)
+    right_value = _normalize_text(right)
+    if left_value == right_value:
+        return True
+    if len(left_value) < 5 or len(right_value) < 5:
+        return False
+    if left_value.endswith(right_value) or right_value.endswith(left_value):
+        return True
+    suffix_len = 0
+    for index in range(1, min(len(left_value), len(right_value)) + 1):
+        if left_value[-index] != right_value[-index]:
+            break
+        suffix_len = index
+    if suffix_len >= 4 and suffix_len >= min(len(left_value), len(right_value)) - 1:
+        return True
+    length_ratio = min(len(left_value), len(right_value)) / max(len(left_value), len(right_value))
+    return length_ratio >= 0.78 and SequenceMatcher(None, left_value, right_value).ratio() >= 0.90
+
+
+def concept_match_count(query_concepts: list[str], evidence_tokens: list[str]) -> int:
+    if not query_concepts or not evidence_tokens:
+        return 0
+    evidence_index = build_token_match_index(evidence_tokens)
+    matched = 0
+    for concept in query_concepts:
+        concept_keys = token_match_keys(concept)
+        if concept_keys & evidence_index:
+            matched += 1
+            continue
+        if any(
+            token_keys_are_related(concept_key, evidence_key)
+            for concept_key in concept_keys
+            for evidence_key in evidence_index
+        ):
+            matched += 1
+    return matched
+
+
+def concept_coverage_score(query_concepts: list[str], evidence_tokens: list[str]) -> float:
+    if not query_concepts or not evidence_tokens:
+        return 0.0
+    matched = concept_match_count(query_concepts, evidence_tokens)
+    return float(matched / max(1, len(query_concepts)))
 
 
 def question_requires_visual_grounding(question: str) -> bool:
@@ -118,10 +259,6 @@ def question_requests_full_document_coverage(question: str) -> bool:
         "todo este documento",
         "todo ese documento",
         "documento completo",
-        "todo el contrato",
-        "todo este contrato",
-        "todo ese contrato",
-        "contrato completo",
         "analiza todo",
         "revisa todo",
         "revision completa",
@@ -200,14 +337,14 @@ class RetrievalPipelineService:
     def warmup(self) -> None:
         self.rerank_service.ensure_available()
 
-    def _resolve_runtime_int(self, key: str, fallback: int, *, minimum: int = 1) -> int:
-        resolved = int(fallback)
+    def _resolve_runtime_int(self, key: str, default_value: int, *, minimum: int = 1) -> int:
+        resolved = int(default_value)
         runtime_reader = getattr(self.settings, "_runtime_config_int", None)
         if callable(runtime_reader):
             try:
-                resolved = int(runtime_reader(key, int(fallback)))
+                resolved = int(runtime_reader(key, int(default_value)))
             except Exception:
-                resolved = int(fallback)
+                resolved = int(default_value)
         return max(int(minimum), resolved)
 
     @staticmethod
@@ -244,15 +381,20 @@ class RetrievalPipelineService:
         query_vector: list[float],
         user_id: int | None,
         file_ids: list[int] | None,
+        priority_file_ids: list[int] | None = None,
         shortlist_limit: int,
     ) -> list[int]:
         if user_id is None:
             return [int(file_id) for file_id in list(file_ids or []) if int(file_id) > 0]
         safe_file_ids = [int(file_id) for file_id in list(file_ids or []) if int(file_id) > 0]
+        priority_ids = self._dedupe_positive_ids(priority_file_ids)
+        if safe_file_ids and priority_ids:
+            allowed = set(safe_file_ids)
+            priority_ids = [file_id for file_id in priority_ids if file_id in allowed]
         if shortlist_limit <= 0:
-            return safe_file_ids
+            return self._dedupe_positive_ids(priority_ids + safe_file_ids)
         if safe_file_ids and len(safe_file_ids) <= shortlist_limit:
-            return safe_file_ids
+            return self._dedupe_positive_ids(priority_ids + safe_file_ids)[:shortlist_limit]
         dense_candidates = self._retrieve_document_dense_candidates(
             query_vector=query_vector,
             user_id=user_id,
@@ -273,7 +415,8 @@ class RetrievalPipelineService:
         shortlisted = [int(item.file_id) for item in fused[:shortlist_limit] if int(item.file_id) > 0]
         if safe_file_ids:
             shortlisted = [file_id for file_id in shortlisted if file_id in set(safe_file_ids)]
-        return shortlisted or safe_file_ids
+        shortlisted = self._dedupe_positive_ids(priority_ids + shortlisted)
+        return shortlisted[:shortlist_limit] or safe_file_ids
 
     def _resolve_page_candidate_limit(
         self,
@@ -328,7 +471,106 @@ class RetrievalPipelineService:
             limit=safe_limit,
             include_shared=True,
         )
-        return self._dedupe_positive_ids(matches)
+        concept_matches = self._metadata_concept_file_ids(
+            question=question,
+            user_id=user_id,
+            file_ids=file_ids,
+            limit=safe_limit,
+        )
+        return self._dedupe_positive_ids(concept_matches + matches)[:safe_limit]
+
+    def _metadata_concept_file_ids(
+        self,
+        *,
+        question: str,
+        user_id: int | None,
+        file_ids: list[int] | None,
+        limit: int,
+    ) -> list[int]:
+        if self.repository is None or user_id is None:
+            return []
+        query_concepts = extract_query_concepts(question)
+        if not query_concepts:
+            return []
+        safe_file_ids = self._dedupe_positive_ids(file_ids)
+        if safe_file_ids:
+            metadata_loader = getattr(self.repository, "get_archive_metadata_for_file_ids", None)
+            if not callable(metadata_loader):
+                return []
+            rows = metadata_loader(
+                user_id=int(user_id),
+                file_ids=safe_file_ids,
+                include_shared=True,
+            )
+        else:
+            metadata_loader = getattr(self.repository, "list_archive_metadata_for_user", None)
+            if not callable(metadata_loader):
+                return []
+            rows = metadata_loader(user_id=int(user_id), include_shared=True)
+        if not rows:
+            return []
+
+        minimum_matches = 1 if len(query_concepts) == 1 else 2
+        scored_archive_slugs: list[tuple[str, float, int]] = []
+        seen_slugs: set[str] = set()
+        for row in rows:
+            archive_slug = str(row.get("archive_slug") or "").strip()
+            normalized_slug = self._normalize_archive_slug(archive_slug)
+            if not normalized_slug or normalized_slug in seen_slugs:
+                continue
+            text = " ".join(
+                str(row.get(key) or "")
+                for key in ("archive_slug", "metadata_search_text", "metadata_json")
+            )
+            tokens = tokenize_text(text)
+            matched = concept_match_count(query_concepts, tokens)
+            if matched < minimum_matches:
+                continue
+            coverage = matched / max(1, len(query_concepts))
+            scored_archive_slugs.append((archive_slug, float(coverage), int(matched)))
+            seen_slugs.add(normalized_slug)
+
+        if not scored_archive_slugs:
+            return []
+        scored_archive_slugs.sort(key=lambda item: (item[2], item[1], item[0]), reverse=True)
+        selected_slugs = [item[0] for item in scored_archive_slugs[: max(1, int(limit))]]
+
+        archive_id_loader = getattr(self.repository, "list_file_ids_for_archive_slugs", None)
+        archive_map_loader = getattr(self.repository, "get_archive_slug_map_for_file_ids", None)
+        if not callable(archive_id_loader):
+            return []
+        expanded_ids = self._dedupe_positive_ids(
+            archive_id_loader(
+                user_id=int(user_id),
+                archive_slugs=selected_slugs,
+                include_shared=True,
+            )
+        )
+        if safe_file_ids:
+            allowed = set(safe_file_ids)
+            expanded_ids = [file_id for file_id in expanded_ids if file_id in allowed]
+        if not expanded_ids:
+            return []
+        if not callable(archive_map_loader):
+            return expanded_ids[: max(1, int(limit))]
+
+        archive_map = archive_map_loader(
+            user_id=int(user_id),
+            file_ids=expanded_ids,
+            include_shared=True,
+        )
+        ordered: list[int] = []
+        for archive_slug in selected_slugs:
+            normalized_slug = self._normalize_archive_slug(archive_slug)
+            for file_id in expanded_ids:
+                if file_id in ordered:
+                    continue
+                if self._normalize_archive_slug(archive_map.get(int(file_id))) == normalized_slug:
+                    ordered.append(int(file_id))
+        for file_id in expanded_ids:
+            if file_id not in ordered:
+                ordered.append(int(file_id))
+        return ordered[: max(1, int(limit))]
 
     def _resolve_explicit_file_scope(
         self,
@@ -623,7 +865,15 @@ class RetrievalPipelineService:
         )
         metadata_prefilter_ms = self._elapsed_ms(metadata_prefilter_started)
         base_file_ids = list(safe_file_ids)
-        if metadata_prefilter_ids:
+        metadata_prefilter_scopes_retrieval = bool(
+            metadata_prefilter_ids
+            and (
+                safe_file_ids
+                or question_class == "metadata_comparison"
+                or self._is_scoped_origin(effective_scope_origin)
+            )
+        )
+        if metadata_prefilter_scopes_retrieval:
             base_file_ids = list(metadata_prefilter_ids)
             if not safe_file_ids:
                 effective_scope_origin = "metadata"
@@ -684,6 +934,7 @@ class RetrievalPipelineService:
                 query_vector=query_vector,
                 user_id=safe_user_id,
                 file_ids=base_file_ids or None,
+                priority_file_ids=metadata_prefilter_ids,
                 shortlist_limit=doc_shortlist_limit,
             )
             if archive_scope_active and archive_slug_map:
@@ -742,7 +993,7 @@ class RetrievalPipelineService:
             max_mmr_pool=max_mmr_pool,
         )
         if effective_file_ids and safe_min_pages_per_doc > 0:
-            fallback_candidates = self._build_per_doc_fallback_candidates(
+            evidence_expansion_candidates = self._build_per_doc_evidence_expansion_candidates(
                 question=question,
                 user_id=safe_user_id,
                 selected_file_ids=effective_file_ids,
@@ -752,7 +1003,7 @@ class RetrievalPipelineService:
             candidate_pool = self._enforce_per_document_quota(
                 candidates=candidate_pool,
                 fused_candidates=fused_candidates,
-                fallback_candidates=fallback_candidates,
+                evidence_expansion_candidates=evidence_expansion_candidates,
                 selected_file_ids=effective_file_ids,
                 min_pages_per_doc=safe_min_pages_per_doc,
             )
@@ -1143,6 +1394,7 @@ class RetrievalPipelineService:
     ) -> list[CandidateRecord]:
         fused: dict[tuple[int, int], CandidateRecord] = {}
         max_lexical_score = max((float(item.get("lexical_score") or 0.0) for item in lexical_candidates), default=0.0)
+        query_concepts = extract_query_concepts(question)
 
         for rank, candidate in enumerate(text_candidates, start=1):
             record = self._ensure_record_from_vector(records=fused, item=candidate)
@@ -1194,6 +1446,11 @@ class RetrievalPipelineService:
             )
             record.text = summary_text
             record.tokens = tokenize_text(summary_text)
+            coverage_score = concept_coverage_score(query_concepts, record.tokens)
+            if coverage_score > 0:
+                record.fused_score += coverage_score * 0.35
+            if lexical_score is not None and query_concepts and coverage_score < 0.25:
+                record.fused_score *= 0.65
             record.evidence = record.evidence.model_copy(
                 update={
                     "summary_text": summary_text,
@@ -1239,7 +1496,7 @@ class RetrievalPipelineService:
             selected.append(remaining.pop(best_index))
         return selected
 
-    def _build_per_doc_fallback_candidates(
+    def _build_per_doc_evidence_expansion_candidates(
         self,
         *,
         question: str,
@@ -1260,6 +1517,7 @@ class RetrievalPipelineService:
         if not rows:
             return []
         query_tokens = tokenize_text(question) or ["_"]
+        query_concepts = extract_query_concepts(question)
         per_doc_candidates: dict[int, list[CandidateRecord]] = {}
         for row in rows:
             file_id = int(row.get("file_id") or 0)
@@ -1268,23 +1526,25 @@ class RetrievalPipelineService:
             text = str(row.get("file_pages_ocr_text") or row.get("page_embeddings_summary") or "").strip()[:4000]
             tokens = tokenize_text(text) or ["_"]
             lexical_score = token_jaccard_similarity(query_tokens, tokens)
+            coverage_score = concept_coverage_score(query_concepts, tokens)
+            fused_score = max(float(lexical_score), coverage_score)
             candidate = CandidateRecord(
                 evidence=self._build_base_evidence_from_row(
                     row,
-                    score=float(lexical_score),
-                    extraction_method="lexical_per_doc_fallback",
+                    score=float(fused_score),
+                    extraction_method="per_doc_evidence_expansion",
                 ).model_copy(
                     update={
                         "summary_text": text,
                         "lexical_score": float(lexical_score),
-                        "fused_score": float(lexical_score),
+                        "fused_score": float(fused_score),
                     }
                 ),
                 text=text,
                 tokens=tokens,
                 text_summary=text,
                 lexical_score=float(lexical_score),
-                fused_score=float(lexical_score),
+                fused_score=float(fused_score),
             )
             per_doc_candidates.setdefault(file_id, []).append(candidate)
         selected: list[CandidateRecord] = []
@@ -1392,7 +1652,7 @@ class RetrievalPipelineService:
         *,
         candidates: list[CandidateRecord],
         fused_candidates: list[CandidateRecord],
-        fallback_candidates: list[CandidateRecord],
+        evidence_expansion_candidates: list[CandidateRecord],
         selected_file_ids: list[int],
         min_pages_per_doc: int,
     ) -> list[CandidateRecord]:
@@ -1409,7 +1669,7 @@ class RetrievalPipelineService:
         by_doc: dict[int, list[CandidateRecord]] = {}
         for item in fused_candidates:
             by_doc.setdefault(int(item.evidence.file_id), []).append(item)
-        for item in fallback_candidates:
+        for item in evidence_expansion_candidates:
             by_doc.setdefault(int(item.evidence.file_id), []).append(item)
 
         def _doc_count(doc_id: int) -> int:

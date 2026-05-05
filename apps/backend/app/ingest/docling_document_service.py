@@ -29,6 +29,8 @@ class DoclingDocumentResult:
 
 
 class DoclingDocumentService:
+    _IMAGE_MARKER_RE = re.compile(r"<\s*!?-{2,}\s*images?\s*-{2,}\s*>", flags=re.IGNORECASE)
+
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
 
@@ -241,6 +243,24 @@ class DoclingDocumentService:
         ]
         return "\n\n".join(blocks).strip()
 
+    @classmethod
+    def _meaningful_markdown_text(cls, markdown_text: str) -> str:
+        return compact_whitespace(cls._IMAGE_MARKER_RE.sub(" ", str(markdown_text or "")))
+
+    @classmethod
+    def _should_reconstruct_markdown(cls, *, markdown_text: str, normalized_text: str) -> bool:
+        text_length = len(compact_whitespace(normalized_text))
+        if text_length == 0:
+            return False
+        markdown_length = len(cls._meaningful_markdown_text(markdown_text))
+        if markdown_length == 0:
+            return True
+        if text_length < 120:
+            return False
+        if text_length >= 500 and markdown_length < 120:
+            return True
+        return markdown_length < max(80, int(text_length * 0.18))
+
     @staticmethod
     def _extract_page_numbers(item: Any) -> list[int]:
         ordered: list[int] = []
@@ -416,7 +436,10 @@ class DoclingDocumentService:
         normalized_text = compact_whitespace(raw_text)
         markdown_source = "docling_export"
         extra_visual_flags: list[str] = []
-        if normalized_text and not markdown_text:
+        if cls._should_reconstruct_markdown(
+            markdown_text=markdown_text,
+            normalized_text=normalized_text,
+        ):
             markdown_text = cls._reconstruct_markdown_from_text(raw_text)
             markdown_source = "ocr_text_reconstruction"
             extra_visual_flags.append("markdown_reconstructed_from_ocr")

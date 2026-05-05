@@ -78,9 +78,7 @@ class AskQuestionResponse(APIModel):
     key_points: list[str]
     obligations: list[str]
     citations: list[CitationItem]
-    sources: list[SourceItem]
     cited_sources: list[SourceItem] = Field(default_factory=list)
-    retrieved_sources: list[SourceItem] = Field(default_factory=list)
     model_used: str
     strategy: str
     answer_mode: str

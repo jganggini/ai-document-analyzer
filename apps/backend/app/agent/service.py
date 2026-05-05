@@ -34,6 +34,7 @@ from apps.backend.app.rag.scope_resolver import QuestionScopeResolver
 from apps.backend.app.rag.retrieval.query_service import RetrievalPipelineService
 from apps.backend.app.rag.reranker_service import HybridLocalOnnxRerankService
 from apps.backend.app.repositories.file_repository import FileRepository
+from apps.backend.app.repositories.qa_trace_repository import QATraceRepository
 from apps.backend.app.services.runtime_config_service import ConfigService
 
 SEARCH_REASONING_STAGES: list[dict[str, Any]] = [
@@ -46,10 +47,11 @@ DOCUMENT_REASONING_STAGES: list[dict[str, Any]] = [
     {"key": "resolve_scope", "label": "Resolving document scope", "starts_at_seconds": 1},
     {"key": "classify_question", "label": "Classifying question type", "starts_at_seconds": 2},
     {"key": "resolve_facts", "label": "Resolving structured facts", "starts_at_seconds": 3},
-    {"key": "retrieve_candidates", "label": "Retrieving multimodal candidates", "starts_at_seconds": 4},
-    {"key": "fuse_page_evidence", "label": "Fusing page evidence", "starts_at_seconds": 6},
-    {"key": "maybe_verify_visual", "label": "Selective visual verification", "starts_at_seconds": 8},
-    {"key": "synthesize_document_answer", "label": "Synthesizing final answer", "starts_at_seconds": 10},
+    {"key": "decide_answerability", "label": "Deciding answerability route", "starts_at_seconds": 4},
+    {"key": "retrieve_candidates", "label": "Retrieving multimodal candidates", "starts_at_seconds": 5},
+    {"key": "fuse_page_evidence", "label": "Fusing page evidence", "starts_at_seconds": 7},
+    {"key": "maybe_verify_visual", "label": "Selective visual verification", "starts_at_seconds": 9},
+    {"key": "synthesize_document_answer", "label": "Synthesizing final answer", "starts_at_seconds": 11},
 ]
 
 GRAPH_NODES: list[dict[str, str]] = [
@@ -58,6 +60,7 @@ GRAPH_NODES: list[dict[str, str]] = [
     {"key": "resolve_scope", "label": "Resolve scope", "kind": "decision"},
     {"key": "classify_question", "label": "Classify question", "kind": "decision"},
     {"key": "resolve_facts", "label": "Resolve facts", "kind": "decision"},
+    {"key": "decide_answerability", "label": "Decide answerability", "kind": "decision"},
     {"key": "retrieve_candidates", "label": "Retrieve candidates", "kind": "retrieval"},
     {"key": "fuse_page_evidence", "label": "Fuse page evidence", "kind": "merge"},
     {"key": "maybe_verify_visual", "label": "Maybe verify visual", "kind": "multimodal"},
@@ -72,8 +75,9 @@ GRAPH_EDGES: list[dict[str, str]] = [
     {"source": "search_response", "target": "persist_turn", "condition": ""},
     {"source": "resolve_scope", "target": "classify_question", "condition": ""},
     {"source": "classify_question", "target": "resolve_facts", "condition": ""},
-    {"source": "resolve_facts", "target": "retrieve_candidates", "condition": "skip_retrieval=false"},
-    {"source": "resolve_facts", "target": "synthesize_document_answer", "condition": "skip_retrieval=true"},
+    {"source": "resolve_facts", "target": "decide_answerability", "condition": ""},
+    {"source": "decide_answerability", "target": "retrieve_candidates", "condition": "answerability_route!=metadata"},
+    {"source": "decide_answerability", "target": "synthesize_document_answer", "condition": "answerability_route=metadata"},
     {"source": "retrieve_candidates", "target": "fuse_page_evidence", "condition": ""},
     {"source": "fuse_page_evidence", "target": "maybe_verify_visual", "condition": ""},
     {"source": "maybe_verify_visual", "target": "synthesize_document_answer", "condition": ""},
@@ -85,8 +89,9 @@ GRAPH_EDGES: list[dict[str, str]] = [
 class QAGraphService:
     """QA entrypoint backed by a LangGraph workflow."""
 
-    def __init__(self, *, graph) -> None:
+    def __init__(self, *, graph, trace_repository: QATraceRepository | None = None) -> None:
         self._graph = graph
+        self._trace_repository = trace_repository
 
     @staticmethod
     def _utc_now_iso() -> str:
@@ -198,7 +203,6 @@ class QAGraphService:
             "resolved_metadata_fields": list(safe_metadata_fields),
             "metadata_only_reason": "",
             "answerability_route": "",
-            "skip_retrieval": False,
             "doc_shortlist_count": 0,
             "text_candidates_count": 0,
             "image_candidates_count": 0,
@@ -351,11 +355,71 @@ class QAGraphService:
                 "retrieval_route": str(state.get("retrieval_route") or ""),
                 "visual_checks_count": int(state.get("visual_checks_count") or 0),
                 "evidence_recall_proxy": float(state.get("evidence_recall_proxy") or 0.0),
+                "evidence_sources_count": int(state.get("evidence_sources_count") or len(evidence)),
+                "cited_sources_count": int(state.get("cited_sources_count") or 0),
                 "node_timings_ms": {
                     str(key): int(value)
                     for key, value in dict(state.get("node_timings_ms") or {}).items()
                 },
             },
+        )
+
+    def _start_trace(
+        self,
+        *,
+        trace_id: str,
+        thread_id: str,
+        user_id: int | None,
+        conversation_id: int | None,
+        question: str,
+        metadata: dict[str, Any],
+    ) -> None:
+        if self._trace_repository is None:
+            return
+        self._trace_repository.start_run(
+            trace_id=trace_id,
+            thread_id=thread_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            question=question,
+            run_metadata=metadata,
+        )
+
+    def _record_trace_step(self, *, trace_id: str, event: dict[str, Any]) -> None:
+        if self._trace_repository is None:
+            return
+        state_patch = event.get("state_patch") if isinstance(event.get("state_patch"), dict) else {}
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        self._trace_repository.record_step(
+            trace_id=trace_id,
+            node_key=str(event.get("node_key") or ""),
+            status=str(event.get("status") or "info"),
+            payload=payload,
+            state_patch=state_patch,
+            duration_ms=int(event["duration_ms"]) if event.get("duration_ms") is not None else None,
+            error=str(event.get("error") or "") or None,
+        )
+
+    def _finish_trace(
+        self,
+        *,
+        trace_id: str,
+        status: str,
+        execution: QueryExecutionResult | None = None,
+        error: str | None = None,
+    ) -> None:
+        if self._trace_repository is None:
+            return
+        telemetry = dict(execution.telemetry or {}) if execution is not None else {}
+        self._trace_repository.finish_run(
+            trace_id=trace_id,
+            status=status,
+            answerability_route=str(telemetry.get("answerability_route") or ""),
+            answer_text=execution.answer.answer_text if execution is not None else "",
+            cited_sources_count=int(telemetry.get("cited_sources_count") or 0),
+            evidence_sources_count=int(telemetry.get("evidence_sources_count") or telemetry.get("evidence_count") or 0),
+            run_metadata=telemetry,
+            error=error,
         )
 
     @classmethod
@@ -535,6 +599,7 @@ class QAGraphService:
             conversation_id=conversation_id,
             thread_id=thread_id,
         )
+        trace_id = uuid.uuid4().hex
         input_state = self._build_graph_input(
             question=question,
             raw_question=raw_question,
@@ -559,16 +624,45 @@ class QAGraphService:
             conversation_scope_question_class=conversation_scope_question_class,
         )
         config = {"configurable": {"thread_id": resolved_thread_id}}
-        state = self._graph.invoke(
-            input_state,
-            config,
-        )
-        if not isinstance(state, dict):
-            raise RuntimeError("Graph execution returned an invalid state.")
-        return self._state_to_execution_result(
-            state=state,
+        self._start_trace(
+            trace_id=trace_id,
             thread_id=resolved_thread_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            question=question,
+            metadata={
+                "mode": "sync",
+                "top_k": max(1, int(top_k)),
+                "candidate_k": int(candidate_k) if candidate_k is not None else None,
+                "summary_mode": str(summary_mode or "default"),
+            },
         )
+        try:
+            state = self._graph.invoke(
+                input_state,
+                config,
+            )
+            if not isinstance(state, dict):
+                raise RuntimeError("Graph execution returned an invalid state.")
+            execution = self._state_to_execution_result(
+                state=state,
+                thread_id=resolved_thread_id,
+            )
+            execution.telemetry["trace_id"] = trace_id
+            for node_key, duration_ms in dict(state.get("node_timings_ms") or {}).items():
+                self._trace_repository.record_step(
+                    trace_id=trace_id,
+                    node_key=str(node_key),
+                    status="completed",
+                    payload={},
+                    state_patch={"duration_ms": int(duration_ms)},
+                    duration_ms=int(duration_ms),
+                ) if self._trace_repository is not None else None
+            self._finish_trace(trace_id=trace_id, status="completed", execution=execution)
+            return execution
+        except Exception as exc:
+            self._finish_trace(trace_id=trace_id, status="failed", error=str(exc))
+            raise
 
     def warmup(self) -> None:
         return None
@@ -616,6 +710,7 @@ class QAGraphService:
             conversation_id=conversation_id,
             thread_id=thread_id,
         )
+        trace_id = uuid.uuid4().hex
         input_state = self._build_graph_input(
             question=question,
             raw_question=raw_question,
@@ -642,6 +737,19 @@ class QAGraphService:
         config = {"configurable": {"thread_id": resolved_thread_id}}
 
         run_started_ts = self._utc_now_iso()
+        self._start_trace(
+            trace_id=trace_id,
+            thread_id=resolved_thread_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            question=question,
+            metadata={
+                "mode": "stream",
+                "top_k": max(1, int(top_k)),
+                "candidate_k": int(candidate_k) if candidate_k is not None else None,
+                "summary_mode": str(summary_mode or "default"),
+            },
+        )
         yield {
             "event_type": "run_started",
             "thread_id": resolved_thread_id,
@@ -681,6 +789,7 @@ class QAGraphService:
                     node_start_times=node_start_times,
                 )
                 for event in normalized_events:
+                    self._record_trace_step(trace_id=trace_id, event=event)
                     patch = event.get("state_patch")
                     if isinstance(patch, dict):
                         accumulated_state.update(patch)
@@ -701,6 +810,7 @@ class QAGraphService:
                 state=final_state,
                 thread_id=resolved_thread_id,
             )
+            execution.telemetry["trace_id"] = trace_id
             checkpoint(
                 "qa_run_completed",
                 tags={
@@ -712,6 +822,7 @@ class QAGraphService:
                     "visual_checks_count": int(execution.telemetry.get("visual_checks_count") or 0),
                 },
             )
+            self._finish_trace(trace_id=trace_id, status="completed", execution=execution)
             yield {
                 "event_type": "run_completed",
                 "thread_id": resolved_thread_id,
@@ -722,6 +833,7 @@ class QAGraphService:
                 "execution": self._serialize_execution_result(execution),
             }
         except Exception as exc:
+            self._finish_trace(trace_id=trace_id, status="failed", error=str(exc))
             yield {
                 "event_type": "run_failed",
                 "thread_id": resolved_thread_id,
@@ -793,4 +905,4 @@ def get_qa_graph_service() -> QAGraphService:
     )
     checkpointer = OracleLangGraphCheckpointer(db_manager)
     graph = build_qa_graph(nodes=nodes, checkpointer=checkpointer)
-    return QAGraphService(graph=graph)
+    return QAGraphService(graph=graph, trace_repository=QATraceRepository(db_manager))

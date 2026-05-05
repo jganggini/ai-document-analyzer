@@ -3,7 +3,7 @@ from __future__ import annotations
 from apps.backend.app.repositories.chat_turns_repository import QASessionsRepository
 
 
-class _FakeVar:
+class _StubVar:
     def __init__(self, value: int) -> None:
         self._value = int(value)
 
@@ -11,7 +11,7 @@ class _FakeVar:
         return [self._value]
 
 
-class _FakeCursor:
+class _StubCursor:
     def __init__(self) -> None:
         self.executed: list[tuple[str, dict[str, object]]] = []
         self.closed = False
@@ -26,21 +26,21 @@ class _FakeCursor:
             return self.fetchone_results.pop(0)
         return (1,)
 
-    def var(self, _kind) -> _FakeVar:
-        return _FakeVar(321)
+    def var(self, _kind) -> _StubVar:
+        return _StubVar(321)
 
     def close(self) -> None:
         self.closed = True
 
 
-class _FakeConnection:
-    def __init__(self, cursor: _FakeCursor) -> None:
+class _StubConnection:
+    def __init__(self, cursor: _StubCursor) -> None:
         self._cursor = cursor
         self.commit_calls = 0
         self.rollback_calls = 0
         self.closed = False
 
-    def cursor(self) -> _FakeCursor:
+    def cursor(self) -> _StubCursor:
         return self._cursor
 
     def commit(self) -> None:
@@ -53,21 +53,21 @@ class _FakeConnection:
         self.closed = True
 
 
-class _FakeDbManager:
-    def __init__(self, connection: _FakeConnection) -> None:
+class _StubDbManager:
+    def __init__(self, connection: _StubConnection) -> None:
         self._connection = connection
 
     def table_exists(self, table_name: str) -> bool:
         return str(table_name or "").strip().lower() == "qa_sessions"
 
-    def get_connection(self) -> _FakeConnection:
+    def get_connection(self) -> _StubConnection:
         return self._connection
 
 
 def test_save_qa_session_persists_full_answer_clob(monkeypatch) -> None:
-    cursor = _FakeCursor()
-    connection = _FakeConnection(cursor)
-    repository = QASessionsRepository(_FakeDbManager(connection))
+    cursor = _StubCursor()
+    connection = _StubConnection(cursor)
+    repository = QASessionsRepository(_StubDbManager(connection))
     monkeypatch.setattr(repository, "_supports_conversation_columns", lambda: False)
     long_answer = "\n".join(f"| {index} | fila {index} |" for index in range(1, 121))
 
@@ -97,9 +97,9 @@ def test_save_qa_session_persists_full_answer_clob(monkeypatch) -> None:
 
 
 def test_save_qa_session_refreshes_conversation_updated_at(monkeypatch) -> None:
-    cursor = _FakeCursor()
-    connection = _FakeConnection(cursor)
-    repository = QASessionsRepository(_FakeDbManager(connection))
+    cursor = _StubCursor()
+    connection = _StubConnection(cursor)
+    repository = QASessionsRepository(_StubDbManager(connection))
     monkeypatch.setattr(repository, "_supports_conversation_columns", lambda: True)
 
     result = repository.save_qa_session(

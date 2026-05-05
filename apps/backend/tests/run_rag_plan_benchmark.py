@@ -431,12 +431,12 @@ def _select_files(rows: dict[str, dict[str, str]], preferred_files: list[str]) -
     return selected[0], selected[1]
 
 
-def _metadata_value(row: dict[str, str], *keys: str, fallback: str = "") -> str:
+def _metadata_value(row: dict[str, str], *keys: str, default_value: str = "") -> str:
     for key in keys:
         value = str(row.get(key) or "").strip()
         if value:
             return value
-    return fallback
+    return default_value
 
 
 def _build_query_specs(
@@ -448,12 +448,12 @@ def _build_query_specs(
     file_ids_a: list[int],
     file_ids_b: list[int],
 ) -> list[QuerySpec]:
-    site_code = _metadata_value(row_a, "Codigo de Sitio", fallback=archive_a.split("_ID_")[0])
-    row_a_id = _metadata_value(row_a, "Id", fallback=archive_a.split("_ID_")[-1])
-    state_a = _metadata_value(row_a, "Estado Contrato", fallback="desconocido")
-    state_b = _metadata_value(row_b, "Estado Contrato", fallback="desconocido")
-    payment_a = _metadata_value(row_a, "Forma de Pago", fallback="desconocido")
-    payment_b = _metadata_value(row_b, "Forma de Pago", fallback="desconocido")
+    site_code = _metadata_value(row_a, "Codigo de Sitio", default_value=archive_a.split("_ID_")[0])
+    row_a_id = _metadata_value(row_a, "Id", default_value=archive_a.split("_ID_")[-1])
+    state_a = _metadata_value(row_a, "Estado Contrato", default_value="desconocido")
+    state_b = _metadata_value(row_b, "Estado Contrato", default_value="desconocido")
+    payment_a = _metadata_value(row_a, "Forma de Pago", default_value="desconocido")
+    payment_b = _metadata_value(row_b, "Forma de Pago", default_value="desconocido")
 
     return [
         QuerySpec(

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 
 from apps.backend.app.core.database import DatabaseManager
 
@@ -34,89 +33,9 @@ class QASessionsRepository:
             cursor.close()
             connection.close()
 
-    @staticmethod
-    def _compact_sources(value: Any, *, max_items: int = 20) -> list[dict[str, Any]]:
-        if not isinstance(value, list):
-            return []
-        compacted: list[dict[str, Any]] = []
-        for item in value[:max_items]:
-            if not isinstance(item, dict):
-                continue
-            compacted.append(
-                {
-                    "source_number": int(item.get("source_number") or 0),
-                    "file_id": int(item.get("file_id") or 0),
-                    "file_name": str(item.get("file_name") or ""),
-                    "page_number": int(item.get("page_number") or 0),
-                    "object_name_page": str(item.get("object_name_page") or ""),
-                    "snippet": str(item.get("snippet") or "")[:500],
-                }
-            )
-        return compacted
-
-    def _serialize_retrieval_metadata(self, retrieval_metadata: dict, *, max_len: int = 4000) -> str:
+    def _serialize_retrieval_metadata(self, retrieval_metadata: dict) -> str:
         payload = dict(retrieval_metadata or {})
-        serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-        if len(serialized) <= max_len:
-            return serialized
-
-        # First pass: keep source arrays compact and bounded.
-        for key in ("sources", "retrieved_sources", "cited_sources"):
-            payload[key] = self._compact_sources(payload.get(key), max_items=20)
-        serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-        if len(serialized) <= max_len:
-            return serialized
-
-        # Second pass: remove the heaviest optional arrays first.
-        for key in ("retrieved_sources", "cited_sources"):
-            payload.pop(key, None)
-        serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-        if len(serialized) <= max_len:
-            return serialized
-
-        # Third pass: shrink sources list and drop object path if still needed.
-        sources = self._compact_sources(payload.get("sources"), max_items=12)
-        payload["sources"] = [
-            {
-                "source_number": int(item.get("source_number") or 0),
-                "file_id": int(item.get("file_id") or 0),
-                "file_name": str(item.get("file_name") or ""),
-                "page_number": int(item.get("page_number") or 0),
-            }
-            for item in sources
-        ]
-        serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-        if len(serialized) <= max_len:
-            return serialized
-
-        # Final pass: guaranteed valid JSON within limit.
-        minimal = {
-            "strategy": str(payload.get("strategy") or ""),
-            "answer_mode": str(payload.get("answer_mode") or ""),
-            "selected_provider": str(payload.get("selected_provider") or ""),
-            "selected_docs_count": int(payload.get("selected_docs_count") or 0),
-            "distinct_files_in_evidence": int(payload.get("distinct_files_in_evidence") or 0),
-            "coverage_ratio": float(payload.get("coverage_ratio") or 0.0),
-            "retrieved_sources_count": int(payload.get("retrieved_sources_count") or 0),
-            "cited_sources_count": int(payload.get("cited_sources_count") or 0),
-            "sources": payload.get("sources") if isinstance(payload.get("sources"), list) else [],
-            "selected_citations": payload.get("selected_citations")
-            if isinstance(payload.get("selected_citations"), list)
-            else [],
-        }
-        serialized = json.dumps(minimal, ensure_ascii=False, separators=(",", ":"))
-        if len(serialized) <= max_len:
-            return serialized
-
-        # Last resort: keep removing trailing sources until payload fits.
-        sources = list(minimal.get("sources") or [])
-        while sources:
-            sources.pop()
-            minimal["sources"] = sources
-            serialized = json.dumps(minimal, ensure_ascii=False, separators=(",", ":"))
-            if len(serialized) <= max_len:
-                return serialized
-        return json.dumps({"strategy": minimal.get("strategy", "")}, ensure_ascii=False, separators=(",", ":"))
+        return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
     def save_qa_session(
         self,
@@ -176,7 +95,7 @@ class QASessionsRepository:
                     conversation_id=int(conversation_id) if conversation_id is not None else None,
                     turn_index=int(turn_index),
                     question=question,
-                    retrieval_metadata=self._serialize_retrieval_metadata(retrieval_metadata, max_len=4000),
+                    retrieval_metadata=self._serialize_retrieval_metadata(retrieval_metadata),
                     answer=answer,
                     model_used=model_used[:255],
                     session_id=session_id_var,
@@ -215,7 +134,7 @@ class QASessionsRepository:
                     user_id=int(user_id),
                     file_id=int(file_id) if file_id is not None else None,
                     question=question,
-                    retrieval_metadata=self._serialize_retrieval_metadata(retrieval_metadata, max_len=4000),
+                    retrieval_metadata=self._serialize_retrieval_metadata(retrieval_metadata),
                     answer=answer,
                     model_used=model_used[:255],
                     session_id=session_id_var,

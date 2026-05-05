@@ -209,6 +209,13 @@ function repairLooseMarkdownTables(markdown: string): string {
     .join('\n');
 }
 
+function cleanPageMarkdownForPreview(markdown: string): string {
+  return String(markdown || '')
+    .replace(/<\s*!?-{2,}\s*images?\s*-{2,}\s*>/gi, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function flattenReactText(node: React.ReactNode): string {
   if (node === null || node === undefined || typeof node === 'boolean') return '';
   if (typeof node === 'string' || typeof node === 'number') return String(node);
@@ -2242,7 +2249,7 @@ function DocumentViewerModal({
 
   const renderedPageMarkdown = React.useMemo(
     () => {
-      return repairLooseMarkdownTables(currentPageMarkdown).trim();
+      return cleanPageMarkdownForPreview(repairLooseMarkdownTables(currentPageMarkdown));
     },
     [currentPageMarkdown]
   );

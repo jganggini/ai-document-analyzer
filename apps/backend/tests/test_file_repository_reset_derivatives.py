@@ -4,7 +4,7 @@ from apps.backend.app.repositories import file_repository as file_repository_mod
 from apps.backend.app.repositories.file_repository import FileRepository
 
 
-class _FakeCursor:
+class _StubCursor:
     def __init__(self) -> None:
         self.executed_sql: list[str] = []
         self.rowcount = 7
@@ -18,14 +18,14 @@ class _FakeCursor:
         self.closed = True
 
 
-class _FakeConnection:
-    def __init__(self, cursor: _FakeCursor) -> None:
+class _StubConnection:
+    def __init__(self, cursor: _StubCursor) -> None:
         self._cursor = cursor
         self.commit_calls = 0
         self.rollback_calls = 0
         self.closed = False
 
-    def cursor(self) -> _FakeCursor:
+    def cursor(self) -> _StubCursor:
         return self._cursor
 
     def commit(self) -> None:
@@ -38,15 +38,15 @@ class _FakeConnection:
         self.closed = True
 
 
-class _FakeDbManager:
-    def __init__(self, connection: _FakeConnection) -> None:
+class _StubDbManager:
+    def __init__(self, connection: _StubConnection) -> None:
         self._connection = connection
 
-    def get_connection(self) -> _FakeConnection:
+    def get_connection(self) -> _StubConnection:
         return self._connection
 
 
-class _FakeDocumentFactsRepository:
+class _StubDocumentFactsRepository:
     def __init__(self) -> None:
         self.reset_calls: list[int] = []
 
@@ -55,15 +55,15 @@ class _FakeDocumentFactsRepository:
 
 
 def test_reset_file_derivatives_relies_on_file_pages_cascade_for_page_embeddings() -> None:
-    cursor = _FakeCursor()
-    connection = _FakeConnection(cursor)
-    repository = FileRepository(_FakeDbManager(connection))
-    fake_document_facts = _FakeDocumentFactsRepository()
-    repository.document_facts = fake_document_facts
+    cursor = _StubCursor()
+    connection = _StubConnection(cursor)
+    repository = FileRepository(_StubDbManager(connection))
+    stub_document_facts = _StubDocumentFactsRepository()
+    repository.document_facts = stub_document_facts
 
     repository.reset_file_derivatives(file_id=346)
 
-    assert fake_document_facts.reset_calls == [346]
+    assert stub_document_facts.reset_calls == [346]
     assert connection.commit_calls == 1
     assert connection.rollback_calls == 0
     assert connection.closed is True
@@ -74,12 +74,12 @@ def test_reset_file_derivatives_relies_on_file_pages_cascade_for_page_embeddings
 
 
 def test_update_file_status_uses_retryable_database_operation(monkeypatch) -> None:
-    cursor = _FakeCursor()
-    connection = _FakeConnection(cursor)
-    repository = FileRepository(_FakeDbManager(connection))
+    cursor = _StubCursor()
+    connection = _StubConnection(cursor)
+    repository = FileRepository(_StubDbManager(connection))
     captured_calls: list[tuple[str, ...]] = []
 
-    def _fake_retryable_write(*, db_manager, operation, candidate_index_names=()):
+    def _stub_retryable_write(*, db_manager, operation, candidate_index_names=()):
         del db_manager
         captured_calls.append(tuple(candidate_index_names))
         return operation()
@@ -87,7 +87,7 @@ def test_update_file_status_uses_retryable_database_operation(monkeypatch) -> No
     monkeypatch.setattr(
         file_repository_module,
         "execute_with_retryable_database_operation",
-        _fake_retryable_write,
+        _stub_retryable_write,
     )
 
     repository.update_file_status(file_id=346, status="completed", page_count=12)
@@ -99,9 +99,9 @@ def test_update_file_status_uses_retryable_database_operation(monkeypatch) -> No
 
 
 def test_mark_incomplete_files_as_failed_only_targets_processing_rows() -> None:
-    cursor = _FakeCursor()
-    connection = _FakeConnection(cursor)
-    repository = FileRepository(_FakeDbManager(connection))
+    cursor = _StubCursor()
+    connection = _StubConnection(cursor)
+    repository = FileRepository(_StubDbManager(connection))
 
     changed = repository.mark_incomplete_files_as_failed()
 

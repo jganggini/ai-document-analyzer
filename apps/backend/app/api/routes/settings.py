@@ -57,7 +57,6 @@ _RETIRED_CONFIG_KEYS = {
 }
 DEFAULT_APP_NAME = "AI Document Analyzer"
 DEFAULT_AGENT_NAME = "Nadia Assist"
-_LEGACY_AGENT_APP_NAMES = {DEFAULT_AGENT_NAME.casefold()}
 
 
 def _avatar_dir() -> Path:
@@ -148,11 +147,6 @@ def _build_payload(service: ConfigService) -> dict[str, Any]:
                 continue
             payload.setdefault(category, {})
             payload[category][field] = value
-    if "app.agent_name" not in seen_keys:
-        configured_name = str(payload.get("app", {}).get("name") or "").strip()
-        if configured_name.casefold() in _LEGACY_AGENT_APP_NAMES:
-            payload["app"]["agent_name"] = configured_name
-            payload["app"]["name"] = DEFAULT_APP_NAME
     avatar_path = _resolve_avatar_file()
     payload.setdefault("app", {})
     payload["app"]["avatar_url"] = _avatar_url(avatar_path)

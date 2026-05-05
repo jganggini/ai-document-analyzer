@@ -9,7 +9,6 @@ import { DEFAULT_APP_DISPLAY_NAME } from '../../config/branding';
 import { appBrandingQueryKey } from '../../hooks/useAppBranding';
 
 const DEFAULT_AGENT_NAME = 'Nadia Assist';
-const LEGACY_AGENT_NAMES = new Set([DEFAULT_AGENT_NAME.toLowerCase()]);
 
 function FieldHint({ children }: { children: React.ReactNode }) {
   return <p className="text-xs text-oracle-light-gray mt-1">{children}</p>;
@@ -21,11 +20,9 @@ function normalizeSettingsPayload(payload: any) {
   const configuredAgentName = String(app.agent_name || '').trim();
 
   if (!configuredAgentName) {
-    app.agent_name = LEGACY_AGENT_NAMES.has(configuredName.toLowerCase())
-      ? configuredName
-      : DEFAULT_AGENT_NAME;
+    app.agent_name = DEFAULT_AGENT_NAME;
   }
-  if (!configuredName || LEGACY_AGENT_NAMES.has(configuredName.toLowerCase())) {
+  if (!configuredName) {
     app.name = DEFAULT_APP_DISPLAY_NAME;
   }
 

@@ -21,9 +21,3 @@ def get_db_connection() -> Generator:
         yield connection
     finally:
         connection.close()
-
-
-def get_db_session() -> Generator:
-    """Alias semantico para compatibilidad con rutas legacy."""
-    yield from get_db_connection()
-

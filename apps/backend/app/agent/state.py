@@ -66,7 +66,6 @@ class QAGraphState(TypedDict):
     resolved_metadata_fields: NotRequired[list[str]]
     metadata_only_reason: NotRequired[str]
     answerability_route: NotRequired[str]
-    skip_retrieval: NotRequired[bool]
     strategy: NotRequired[str]
     selected_provider: NotRequired[str]
     doc_shortlist_count: NotRequired[int]
@@ -91,6 +90,8 @@ class QAGraphState(TypedDict):
     retrieval_route: NotRequired[str]
     visual_checks_count: NotRequired[int]
     evidence_recall_proxy: NotRequired[float]
+    evidence_sources_count: NotRequired[int]
+    cited_sources_count: NotRequired[int]
     node_timings_ms: NotRequired[dict[str, int]]
 
     evidence: NotRequired[list[EvidenceItem]]

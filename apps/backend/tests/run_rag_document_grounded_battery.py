@@ -47,12 +47,12 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _metadata_value(row: dict[str, str], *keys: str, fallback: str = "") -> str:
+def _metadata_value(row: dict[str, str], *keys: str, default_value: str = "") -> str:
     for key in keys:
         value = str(row.get(key) or "").strip()
         if value:
             return value
-    return fallback
+    return default_value
 
 
 def _list_all_completed_files(*, base_url: str, token: str, timeout_seconds: int) -> list[dict[str, Any]]:
@@ -401,7 +401,7 @@ def _build_markdown_report(*, payload: dict[str, Any]) -> str:
             lines.append(
                 f"- {pass_result['label']}: status=`{item['status_code']}` | elapsed=`{item['elapsed_ms']} ms` | "
                 f"strategy=`{item['strategy'] or '-'}` | precision=`{item['precision_score']}` | "
-                f"citations=`{item['citations_count']}` | retrieved=`{item['retrieved_sources_count']}`"
+                f"citations=`{item['citations_count']}` | evidence=`{item['evidence_sources_count']}`"
             )
             if item["term_hits"] or item["term_misses"]:
                 lines.append(
@@ -413,8 +413,8 @@ def _build_markdown_report(*, payload: dict[str, Any]) -> str:
                     f"- {pass_result['label']} source_hits=`{', '.join(item['source_hits']) or '-'}` | "
                     f"source_misses=`{', '.join(item['source_misses']) or '-'}`"
                 )
-            if item["retrieved_source_names"]:
-                lines.append(f"- {pass_result['label']} top_sources: {', '.join(item['retrieved_source_names'][:4])}")
+            if item["evidence_source_names"]:
+                lines.append(f"- {pass_result['label']} top_sources: {', '.join(item['evidence_source_names'][:4])}")
             if item["error"]:
                 lines.append(f"- {pass_result['label']} error: `{item['error']}`")
             lines.append(f"- {pass_result['label']} answer_preview: {item['answer_preview'] or '-'}")

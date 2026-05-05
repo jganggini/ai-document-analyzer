@@ -54,14 +54,3 @@ def get_oci_namespace_and_bucket_required(db_manager: Any) -> Tuple[str, str]:
     bucket_name = get_oci_bucket_required(db_manager)
     return namespace, bucket_name
 
-
-def get_oci_buckets_required(db_manager: Any) -> Dict[str, str]:
-    """Compat wrapper para codigo legacy: retorna {'name': bucket_name}."""
-    return {"name": get_oci_bucket_required(db_manager)}
-
-
-def get_oci_namespace_and_buckets_required(db_manager: Any) -> Tuple[str, Dict[str, str]]:
-    """Compat wrapper para codigo legacy: namespace + {'name': bucket_name}."""
-    namespace, bucket_name = get_oci_namespace_and_bucket_required(db_manager)
-    return namespace, {"name": bucket_name}
-

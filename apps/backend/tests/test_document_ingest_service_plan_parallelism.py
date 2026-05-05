@@ -15,7 +15,7 @@ def test_process_document_plan_runs_items_in_parallel_when_enabled() -> None:
     service._pre_register_process_plan_items = lambda *, process_items, user_id: None
     service._resolve_max_parallel_documents = lambda: 3
 
-    def fake_process_documents(
+    def stub_process_documents(
         *,
         source_path,
         include_archives,
@@ -39,7 +39,7 @@ def test_process_document_plan_runs_items_in_parallel_when_enabled() -> None:
             )
         ]
 
-    service.process_documents = fake_process_documents
+    service.process_documents = stub_process_documents
 
     progress: list[str] = []
     process_items = [
@@ -80,7 +80,7 @@ def test_process_document_plan_interleaves_archives_to_avoid_worker_starvation()
     }
     start_order: list[str] = []
 
-    def fake_process_plan_item(*, raw_item, user_id, metadata_upload_id):
+    def stub_process_plan_item(*, raw_item, user_id, metadata_upload_id):
         del user_id, metadata_upload_id
         archive_slug = str(raw_item.get("archive_slug") or "")
         with archive_locks[archive_slug]:
@@ -96,7 +96,7 @@ def test_process_document_plan_interleaves_archives_to_avoid_worker_starvation()
                 )
             ]
 
-    service._process_plan_item = fake_process_plan_item
+    service._process_plan_item = stub_process_plan_item
 
     process_items = [
         {
@@ -160,7 +160,7 @@ def test_process_documents_runs_archive_pdfs_in_parallel_when_enabled(tmp_path: 
     service._pre_register_pdf_contexts = lambda **kwargs: None
     service._resolve_max_parallel_documents = lambda: 3
 
-    def fake_process_pdf(
+    def stub_process_pdf(
         pdf_path,
         *,
         user_id,
@@ -182,7 +182,7 @@ def test_process_documents_runs_archive_pdfs_in_parallel_when_enabled(tmp_path: 
             object_name=str(pdf_path),
         )
 
-    service._process_pdf = fake_process_pdf
+    service._process_pdf = stub_process_pdf
 
     started = time.perf_counter()
     result = IngestionService.process_documents(
@@ -233,7 +233,7 @@ def test_process_documents_runs_same_archive_pdfs_in_parallel_when_enabled(
     active_by_archive: dict[str, int] = {}
     max_by_archive: dict[str, int] = {}
 
-    def fake_process_pdf(
+    def stub_process_pdf(
         pdf_path,
         *,
         user_id,
@@ -267,7 +267,7 @@ def test_process_documents_runs_same_archive_pdfs_in_parallel_when_enabled(
             object_name=str(pdf_path),
         )
 
-    service._process_pdf = fake_process_pdf
+    service._process_pdf = stub_process_pdf
 
     started = time.perf_counter()
     result = IngestionService.process_documents(
@@ -310,7 +310,7 @@ def test_process_documents_interleaves_archives_when_workers_are_limited(tmp_pat
 
     start_order: list[str] = []
 
-    def fake_process_pdf(
+    def stub_process_pdf(
         pdf_path,
         *,
         user_id,
@@ -333,7 +333,7 @@ def test_process_documents_interleaves_archives_when_workers_are_limited(tmp_pat
             object_name=str(pdf_path),
         )
 
-    service._process_pdf = fake_process_pdf
+    service._process_pdf = stub_process_pdf
 
     result = IngestionService.process_documents(
         service,
@@ -376,7 +376,7 @@ def test_pre_register_process_plan_items_uses_plan_paths_without_rediscovering_s
         get_or_create_file=lambda **kwargs: registered_calls.append(dict(kwargs)),
     )
 
-    def fake_sha256_file(path: Path) -> str:
+    def stub_sha256_file(path: Path) -> str:
         normalized = str(Path(path))
         hash_calls.append(normalized)
         if normalized == str(archive_zip):
@@ -385,7 +385,7 @@ def test_pre_register_process_plan_items_uses_plan_paths_without_rediscovering_s
 
     monkeypatch.setattr(
         "apps.backend.app.ingest.document_ingest_service.sha256_file",
-        fake_sha256_file,
+        stub_sha256_file,
     )
 
     IngestionService._pre_register_process_plan_items(

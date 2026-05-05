@@ -7,7 +7,7 @@ CREATE TABLE file_pages (
     file_pages_output_obj_name  VARCHAR2(1024) DEFAULT 'local-page-only' NOT NULL,
     file_pages_ocr_obj_name     VARCHAR2(1024) DEFAULT '' NOT NULL,
     file_pages_ocr_confidence   NUMBER DEFAULT 0 NOT NULL,
-    file_pages_ocr_method       VARCHAR2(64) DEFAULT 'fallback_pdf_text' NOT NULL,
+    file_pages_ocr_method       VARCHAR2(64) DEFAULT 'pdf_text' NOT NULL,
     file_pages_ocr_text         CLOB DEFAULT 'No OCR text extracted.' NOT NULL,
     file_pages_markdown_text    CLOB,
     file_pages_visual_summary   CLOB,

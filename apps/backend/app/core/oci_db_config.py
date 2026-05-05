@@ -143,7 +143,7 @@ def get_oci_bucket_name(db_manager: DatabaseManager) -> Optional[str]:
         cursor.execute("""
             SELECT config_key, config_value
             FROM config
-            WHERE config_key IN ('oci.bucket_name', 'oci.bucket_input', 'oci.bucket_output')
+            WHERE config_key = 'oci.bucket_name'
         """)
 
         values: Dict[str, str] = {}
@@ -157,23 +157,8 @@ def get_oci_bucket_name(db_manager: DatabaseManager) -> Optional[str]:
         cursor.close()
         conn.close()
 
-        explicit_name = values.get("oci.bucket_name", "")
-        if explicit_name:
-            return explicit_name
-
-        # Backward-compatibility path for legacy setup data.
-        legacy_input = values.get("oci.bucket_input", "")
-        legacy_output = values.get("oci.bucket_output", "")
-        return legacy_input or legacy_output or None
+        return values.get("oci.bucket_name", "") or None
 
     except Exception as e:
         logger.error("Error loading OCI bucket name: %s", e)
         return None
-
-
-def get_oci_buckets(db_manager: DatabaseManager) -> Dict[str, str]:
-    """Backward-compatible wrapper returning a single named bucket."""
-    bucket_name = get_oci_bucket_name(db_manager)
-    if not bucket_name:
-        return {}
-    return {"name": bucket_name}

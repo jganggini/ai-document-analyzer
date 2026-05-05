@@ -10,6 +10,7 @@ import { Home } from './components/pages/Home';
 import { Chat } from './components/pages/Chat';
 import { RAG } from './components/pages/RAG';
 import { Metadata } from './components/pages/Metadata';
+import { ContinuousImprovement } from './components/pages/ContinuousImprovement';
 import { Settings } from './components/pages/Settings';
 import { Profile } from './components/pages/Profile';
 import { Users } from './components/pages/Users';
@@ -66,6 +67,8 @@ function AppRouter() {
           <Route path="/home" element={isAuthenticated ? <Home /> : <Navigate to="/login" replace />} />
           <Route path="/chat" element={isAuthenticated ? <Chat /> : <Navigate to="/login" replace />} />
           <Route path="/rag" element={isAuthenticated ? <RAG /> : <Navigate to="/login" replace />} />
+          <Route path="/observability" element={isAuthenticated ? <ContinuousImprovement /> : <Navigate to="/login" replace />} />
+          <Route path="/improvement" element={<Navigate to="/observability" replace />} />
           <Route path="/metadata" element={isAuthenticated ? <Metadata /> : <Navigate to="/login" replace />} />
           <Route path="/profile" element={isAuthenticated ? <Profile /> : <Navigate to="/login" replace />} />
           <Route

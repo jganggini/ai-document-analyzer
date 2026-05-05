@@ -19,7 +19,7 @@ def test_process_rendered_pages_skips_image_embeddings_when_visual_enrichment_is
     added_pages: list[dict[str, object]] = []
 
     image_path = tmp_path / "page-1.png"
-    image_path.write_bytes(b"fake-image")
+    image_path.write_bytes(b"stub-image")
 
     service.settings = SimpleNamespace(
         data_dir=tmp_path,
@@ -104,7 +104,7 @@ def test_process_rendered_pages_passes_docling_context_into_visual_enrichment(tm
     captured_enrichment_kwargs: list[dict[str, object]] = []
 
     image_path = tmp_path / "page-1.png"
-    image_path.write_bytes(b"fake-image")
+    image_path.write_bytes(b"stub-image")
 
     service.settings = SimpleNamespace(
         data_dir=tmp_path,
@@ -187,7 +187,7 @@ def test_process_rendered_pages_skips_text_embeddings_for_blank_ocr_pages(tmp_pa
     added_pages: list[dict[str, object]] = []
 
     image_path = tmp_path / "page-1.png"
-    image_path.write_bytes(b"fake-image")
+    image_path.write_bytes(b"stub-image")
 
     service.settings = SimpleNamespace(
         data_dir=tmp_path,
@@ -270,7 +270,7 @@ def test_process_rendered_pages_writes_image_embeddings_for_docling_visual_pages
     page_embedding_calls: list[dict[str, object]] = []
 
     image_path = tmp_path / "page-1.png"
-    image_path.write_bytes(b"fake-image")
+    image_path.write_bytes(b"stub-image")
 
     service.settings = SimpleNamespace(
         data_dir=tmp_path,

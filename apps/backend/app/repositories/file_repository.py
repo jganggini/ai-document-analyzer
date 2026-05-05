@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 import re
 import time
+import unicodedata
 from typing import Any, TypeVar
 
 from apps.backend.app.core.config import get_settings
@@ -35,6 +36,104 @@ from apps.backend.app.repositories.repository_utils import (
 
 T = TypeVar("T")
 
+_LEXICAL_SCAN_TOKEN_RE = re.compile(r"\w+", re.UNICODE)
+_LEXICAL_SCAN_STOPWORDS = {
+    "a",
+    "al",
+    "an",
+    "and",
+    "archivo",
+    "archivos",
+    "con",
+    "cual",
+    "cuales",
+    "de",
+    "del",
+    "documento",
+    "documentos",
+    "el",
+    "en",
+    "esta",
+    "este",
+    "habla",
+    "hablan",
+    "la",
+    "las",
+    "los",
+    "o",
+    "or",
+    "para",
+    "por",
+    "que",
+    "se",
+    "sobre",
+    "the",
+    "un",
+    "una",
+    "y",
+}
+
+
+def _normalize_lexical_scan_text(value: str | None) -> str:
+    normalized = unicodedata.normalize("NFKD", str(value or ""))
+    normalized = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    normalized = normalized.lower()
+    normalized = re.sub(r"[_/\\\-]+", " ", normalized)
+    normalized = re.sub(r"[^\w\s]+", " ", normalized)
+    return " ".join(normalized.split())
+
+
+def _lexical_scan_keys(token: str) -> set[str]:
+    normalized = _normalize_lexical_scan_text(token)
+    if not normalized or " " in normalized:
+        return set()
+    keys = {normalized}
+    if len(normalized) > 4 and normalized.endswith("s"):
+        keys.add(normalized[:-1])
+    for suffix in (
+        "aciones",
+        "acion",
+        "ando",
+        "iendo",
+        "ados",
+        "adas",
+        "idos",
+        "idas",
+        "ado",
+        "ada",
+        "ido",
+        "ida",
+        "ar",
+        "er",
+        "ir",
+    ):
+        if len(normalized) > len(suffix) + 3 and normalized.endswith(suffix):
+            keys.add(normalized[: -len(suffix)])
+            break
+    if len(normalized) > 5 and normalized[-1] in {"a", "e", "o"}:
+        keys.add(normalized[:-1])
+    if normalized.startswith("atras"):
+        keys.add(normalized.replace("atras", "retras", 1))
+    if normalized.startswith("retras"):
+        keys.add(normalized.replace("retras", "atras", 1))
+    return {key for key in keys if len(key) >= 3}
+
+
+def _build_lexical_scan_terms(text: str | None, *, limit: int = 8) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for token in _LEXICAL_SCAN_TOKEN_RE.findall(_normalize_lexical_scan_text(text)):
+        if len(token) < 3 or token in _LEXICAL_SCAN_STOPWORDS:
+            continue
+        for key in sorted(_lexical_scan_keys(token), key=lambda item: (len(item), item), reverse=True):
+            if key in seen:
+                continue
+            seen.add(key)
+            ordered.append(key)
+            if len(ordered) >= limit:
+                return ordered
+    return ordered
+
 
 class FileRepository:
     def __init__(self, db_manager: DatabaseManager) -> None:
@@ -48,15 +147,15 @@ class FileRepository:
         self.qa_sessions = QASessionsRepository(db_manager)
 
     @staticmethod
-    def _non_empty_string(value: str | None, *, fallback: str) -> str:
-        return non_empty_string(value, fallback=fallback)
+    def _non_empty_string(value: str | None, *, default_value: str) -> str:
+        return non_empty_string(value, default_value=default_value)
 
     @staticmethod
-    def _normalize_access_scope(value: str | None, *, fallback: str = "private") -> str:
+    def _normalize_access_scope(value: str | None, *, default_value: str = "private") -> str:
         normalized = str(value or "").strip().lower()
         if normalized == "all":
             return "all"
-        return fallback
+        return default_value
 
     @staticmethod
     def _status_to_code(status: str) -> int:
@@ -187,7 +286,7 @@ class FileRepository:
         archive_slug: str | None = None,
         access_scope: str | None = None,
     ) -> dict[str, Any]:
-        input_object_name = self._non_empty_string(bucket_object_name, fallback=original_local_path)
+        input_object_name = self._non_empty_string(bucket_object_name, default_value=original_local_path)
         normalized_archive_slug = (str(archive_slug or "").strip()[:256] or None)
         normalized_access_scope = (
             self._normalize_access_scope(access_scope)
@@ -216,7 +315,7 @@ class FileRepository:
                 existing_archive_slug = str(payload.get("archive_slug") or "").strip() or None
                 existing_access_scope = self._normalize_access_scope(
                     str(payload.get("access_scope") or None),
-                    fallback="private",
+                    default_value="private",
                 )
                 next_archive_slug = normalized_archive_slug if normalized_archive_slug else existing_archive_slug
                 next_access_scope = normalized_access_scope if normalized_access_scope else existing_access_scope
@@ -270,9 +369,9 @@ class FileRepository:
                 file_input_file_name=file_name,
                 file_input_size=int(file_input_size or 0),
                 file_input_obj_name=input_object_name,
-                file_output_obj_name=self._non_empty_string(bucket_object_name, fallback=f"pending/{file_name}"),
+                file_output_obj_name=self._non_empty_string(bucket_object_name, default_value=f"pending/{file_name}"),
                 archive_slug=normalized_archive_slug,
-                access_scope=self._normalize_access_scope(normalized_access_scope, fallback="private"),
+                access_scope=self._normalize_access_scope(normalized_access_scope, default_value="private"),
                 file_page_count=0,
                 file_state=self._status_to_code("registered"),
                 file_id=file_id_var,
@@ -288,9 +387,9 @@ class FileRepository:
                 "user_id": user_id,
                 "file_input_file_name": file_name,
                 "file_input_obj_name": input_object_name,
-                "file_output_obj_name": self._non_empty_string(bucket_object_name, fallback=f"pending/{file_name}"),
+                "file_output_obj_name": self._non_empty_string(bucket_object_name, default_value=f"pending/{file_name}"),
                 "archive_slug": normalized_archive_slug,
-                "access_scope": self._normalize_access_scope(normalized_access_scope, fallback="private"),
+                "access_scope": self._normalize_access_scope(normalized_access_scope, default_value="private"),
                 "file_page_count": 0,
                 "file_state": self._status_to_code("registered"),
                 "file_created": created_at,
@@ -361,7 +460,7 @@ class FileRepository:
                     SET file_output_obj_name = :file_output_obj_name
                     WHERE file_id = :file_id
                     """,
-                    file_output_obj_name=self._non_empty_string(bucket_object_name, fallback="pending/object"),
+                    file_output_obj_name=self._non_empty_string(bucket_object_name, default_value="pending/object"),
                     file_id=int(file_id),
                 )
                 connection.commit()
@@ -395,7 +494,7 @@ class FileRepository:
                     WHERE file_id = :file_id
                     """,
                     file_code=(str(document_code).strip().upper()[:64] if document_code else None),
-                    file_code_source=self._non_empty_string(document_code_source, fallback="none")[:32],
+                    file_code_source=self._non_empty_string(document_code_source, default_value="none")[:32],
                     archive_slug=(str(archive_slug or "").strip()[:256] or None),
                     file_id=int(file_id),
                 )
@@ -938,6 +1037,189 @@ class FileRepository:
             cursor.close()
             connection.close()
 
+    @staticmethod
+    def _merge_lexical_rows(
+        *,
+        primary_rows: list[dict[str, Any]],
+        scan_rows: list[dict[str, Any]],
+        key_name: str,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        records: dict[int, dict[str, Any]] = {}
+        order: dict[int, int] = {}
+        for row in list(primary_rows or []) + list(scan_rows or []):
+            key = int(row.get(key_name) or 0)
+            if key <= 0:
+                continue
+            existing = records.get(key)
+            if existing is None:
+                records[key] = dict(row)
+                order[key] = len(order)
+                continue
+            if float(row.get("lexical_score") or 0.0) > float(existing.get("lexical_score") or 0.0):
+                existing["lexical_score"] = row.get("lexical_score")
+        ranked = sorted(
+            records.values(),
+            key=lambda item: (
+                float(item.get("lexical_score") or 0.0),
+                -order.get(int(item.get(key_name) or 0), 0),
+            ),
+            reverse=True,
+        )
+        return ranked[: max(1, int(limit))]
+
+    def _scan_lexical_pages(
+        self,
+        *,
+        user_id: int,
+        question: str,
+        file_ids: list[int] | None,
+        limit: int,
+        include_shared: bool,
+    ) -> list[dict[str, Any]]:
+        terms = _build_lexical_scan_terms(question)
+        if not terms:
+            return []
+        params: dict[str, Any] = {"user_id": int(user_id)}
+        score_parts: list[str] = []
+        term_conditions: list[str] = []
+        for index, term in enumerate(terms):
+            key = f"scan_term_{index}"
+            params[key] = term
+            condition = f"INSTR(scanned.scan_text, :{key}) > 0"
+            term_conditions.append(condition)
+            score_parts.append(f"CASE WHEN {condition} THEN 1 ELSE 0 END")
+        inner_where_conditions = [
+            self._file_access_condition(alias="f", include_shared=include_shared),
+        ]
+        safe_file_ids = self._dedupe_positive_ids(file_ids)
+        if safe_file_ids:
+            placeholders: list[str] = []
+            for index, file_id in enumerate(safe_file_ids):
+                key = f"file_id_{index}"
+                params[key] = int(file_id)
+                placeholders.append(f":{key}")
+            inner_where_conditions.append(f"f.file_id IN ({', '.join(placeholders)})")
+
+        connection = self.db_manager.get_connection()
+        cursor = connection.cursor()
+        try:
+            score_expr = " + ".join(score_parts)
+            cursor.execute(
+                f"""
+                SELECT scanned.file_id,
+                       scanned.file_pages_id,
+                       scanned.file_pages_number,
+                       scanned.file_pages_image_path_local,
+                       scanned.file_pages_output_obj_name,
+                       scanned.file_pages_ocr_confidence,
+                       scanned.file_pages_ocr_method,
+                       scanned.file_pages_ocr_text,
+                       scanned.file_pages_visual_summary,
+                       scanned.file_pages_search_text,
+                       scanned.file_input_file_name,
+                       scanned.archive_slug,
+                       scanned.file_code,
+                       ({score_expr}) AS lexical_score
+                FROM (
+                    SELECT fp.file_id,
+                           fp.file_pages_id,
+                           fp.file_pages_number,
+                           fp.file_pages_image_path_local,
+                           fp.file_pages_output_obj_name,
+                           fp.file_pages_ocr_confidence,
+                           fp.file_pages_ocr_method,
+                           fp.file_pages_ocr_text,
+                           fp.file_pages_visual_summary,
+                           fp.file_pages_search_text,
+                           f.file_input_file_name,
+                           f.archive_slug,
+                           f.file_code,
+                           LOWER(DBMS_LOB.SUBSTR(fp.file_pages_search_text, 4000, 1)) AS scan_text
+                    FROM file_pages fp
+                    JOIN files f ON f.file_id = fp.file_id
+                    WHERE {' AND '.join(inner_where_conditions)}
+                ) scanned
+                WHERE {' OR '.join(term_conditions)}
+                ORDER BY ({score_expr}) DESC, scanned.file_id ASC, scanned.file_pages_number ASC
+                FETCH FIRST {max(1, min(int(limit), 24000))} ROWS ONLY
+                """,
+                params,
+            )
+            return [self._row_to_dict(cursor, row) for row in cursor.fetchall()]
+        finally:
+            cursor.close()
+            connection.close()
+
+    def _scan_lexical_documents(
+        self,
+        *,
+        user_id: int,
+        question: str,
+        file_ids: list[int] | None,
+        limit: int,
+        include_shared: bool,
+    ) -> list[dict[str, Any]]:
+        terms = _build_lexical_scan_terms(question)
+        if not terms:
+            return []
+        params: dict[str, Any] = {"user_id": int(user_id)}
+        score_parts: list[str] = []
+        term_conditions: list[str] = []
+        for index, term in enumerate(terms):
+            key = f"scan_term_{index}"
+            params[key] = term
+            condition = f"INSTR(scanned.scan_text, :{key}) > 0"
+            term_conditions.append(condition)
+            score_parts.append(f"CASE WHEN {condition} THEN 1 ELSE 0 END")
+        inner_where_conditions = [
+            self._file_access_condition(alias="f", include_shared=include_shared),
+        ]
+        safe_file_ids = self._dedupe_positive_ids(file_ids)
+        if safe_file_ids:
+            placeholders: list[str] = []
+            for index, file_id in enumerate(safe_file_ids):
+                key = f"file_id_{index}"
+                params[key] = int(file_id)
+                placeholders.append(f":{key}")
+            inner_where_conditions.append(f"fe.file_id IN ({', '.join(placeholders)})")
+
+        connection = self.db_manager.get_connection()
+        cursor = connection.cursor()
+        try:
+            score_expr = " + ".join(score_parts)
+            cursor.execute(
+                f"""
+                SELECT scanned.file_id,
+                       scanned.file_embeddings_summary,
+                       scanned.file_embeddings_search_text,
+                       scanned.file_input_file_name,
+                       scanned.archive_slug,
+                       scanned.file_code,
+                       ({score_expr}) AS lexical_score
+                FROM (
+                    SELECT fe.file_id,
+                           fe.file_embeddings_summary,
+                           fe.file_embeddings_search_text,
+                           f.file_input_file_name,
+                           f.archive_slug,
+                           f.file_code,
+                           LOWER(DBMS_LOB.SUBSTR(fe.file_embeddings_search_text, 4000, 1)) AS scan_text
+                    FROM file_embeddings fe
+                    JOIN files f ON f.file_id = fe.file_id
+                    WHERE {' AND '.join(inner_where_conditions)}
+                ) scanned
+                WHERE {' OR '.join(term_conditions)}
+                ORDER BY ({score_expr}) DESC, scanned.file_id ASC
+                FETCH FIRST {max(1, min(int(limit), 24000))} ROWS ONLY
+                """,
+                params,
+            )
+            return [self._row_to_dict(cursor, row) for row in cursor.fetchall()]
+        finally:
+            cursor.close()
+            connection.close()
+
     def search_lexical_pages(
         self,
         *,
@@ -949,8 +1231,7 @@ class FileRepository:
     ) -> list[dict[str, Any]]:
         safe_limit = max(1, min(int(limit), 24000))
         contains_query = build_oracle_text_contains_query(question)
-        if not contains_query:
-            return []
+        text_rows: list[dict[str, Any]] = []
 
         def _run_query() -> list[dict[str, Any]]:
             params: dict[str, Any] = {
@@ -1002,10 +1283,24 @@ class FileRepository:
                 cursor.close()
                 connection.close()
 
-        return execute_with_oracle_text_repair(
-            db_manager=self.db_manager,
-            operation=_run_query,
-            candidate_index_names=("IDX_FILE_PAGES_SEARCH_TEXT",),
+        if contains_query:
+            text_rows = execute_with_oracle_text_repair(
+                db_manager=self.db_manager,
+                operation=_run_query,
+                candidate_index_names=("IDX_FILE_PAGES_SEARCH_TEXT",),
+            )
+        scan_rows = self._scan_lexical_pages(
+            user_id=user_id,
+            question=question,
+            file_ids=file_ids,
+            limit=safe_limit,
+            include_shared=include_shared,
+        )
+        return self._merge_lexical_rows(
+            primary_rows=text_rows,
+            scan_rows=scan_rows,
+            key_name="file_pages_id",
+            limit=safe_limit,
         )
 
     def search_lexical_documents(
@@ -1019,8 +1314,7 @@ class FileRepository:
     ) -> list[dict[str, Any]]:
         safe_limit = max(1, min(int(limit), 24000))
         contains_query = build_oracle_text_contains_query(question)
-        if not contains_query:
-            return []
+        text_rows: list[dict[str, Any]] = []
 
         def _run_query() -> list[dict[str, Any]]:
             connection = self.db_manager.get_connection()
@@ -1064,10 +1358,24 @@ class FileRepository:
                 cursor.close()
                 connection.close()
 
-        return execute_with_oracle_text_repair(
-            db_manager=self.db_manager,
-            operation=_run_query,
-            candidate_index_names=("IDX_FILE_EMBEDDINGS_SEARCH_TEXT",),
+        if contains_query:
+            text_rows = execute_with_oracle_text_repair(
+                db_manager=self.db_manager,
+                operation=_run_query,
+                candidate_index_names=("IDX_FILE_EMBEDDINGS_SEARCH_TEXT",),
+            )
+        scan_rows = self._scan_lexical_documents(
+            user_id=user_id,
+            question=question,
+            file_ids=file_ids,
+            limit=safe_limit,
+            include_shared=include_shared,
+        )
+        return self._merge_lexical_rows(
+            primary_rows=text_rows,
+            scan_rows=scan_rows,
+            key_name="file_id",
+            limit=safe_limit,
         )
 
     def delete_file(self, *, file_id: int, user_id: int | None = None) -> bool:

@@ -273,7 +273,7 @@ def _infer_file_role(file_name: str, excerpts: str) -> str:
     return "other"
 
 
-def _extract_primary_identifier(excerpts: str, fallback: str | None = None) -> str:
+def _extract_primary_identifier(excerpts: str, default_value: str | None = None) -> str:
     patterns = (
         r"(?:id\s+de\s+contrato|contract\s+id|identifier|codigo|code|folio|expediente)\s*[:\-]?\s*([A-Z0-9./_-]{3,})",
         r"\bID\s*[:\-]?\s*([A-Z0-9./_-]{3,})\b",
@@ -282,10 +282,10 @@ def _extract_primary_identifier(excerpts: str, fallback: str | None = None) -> s
         match = re.search(pattern, excerpts, flags=re.IGNORECASE)
         if match:
             return compact_whitespace(match.group(1)).upper()[:128]
-    return compact_whitespace(str(fallback or "")).upper()[:128]
+    return compact_whitespace(str(default_value or "")).upper()[:128]
 
 
-def _extract_secondary_identifier(excerpts: str, fallback: str | None = None) -> str:
+def _extract_secondary_identifier(excerpts: str, default_value: str | None = None) -> str:
     patterns = (
         r"(?:sitio|site|ubicacion|location)\s*(?:id)?\s*[:\-]?\s*([A-Z0-9./_-]{2,})",
         r"\bRM\d{2,}\b",
@@ -295,7 +295,7 @@ def _extract_secondary_identifier(excerpts: str, fallback: str | None = None) ->
         if match:
             matched_value = match.group(1) if match.lastindex else match.group(0)
             return compact_whitespace(matched_value).upper()[:128]
-    return compact_whitespace(str(fallback or "")).upper()[:128]
+    return compact_whitespace(str(default_value or "")).upper()[:128]
 
 
 def _extract_entity_name(excerpts: str, *, preferred_tokens: tuple[str, ...]) -> str:
@@ -661,8 +661,8 @@ class DocumentFactExtractor:
         excerpts: str,
         page_rows: list[dict[str, Any]],
     ) -> DocumentInsight:
-        primary_identifier = _extract_primary_identifier(excerpts, fallback=document_code) or None
-        secondary_identifier = _extract_secondary_identifier(excerpts, fallback=document_code) or None
+        primary_identifier = _extract_primary_identifier(excerpts, default_value=document_code) or None
+        secondary_identifier = _extract_secondary_identifier(excerpts, default_value=document_code) or None
         primary_subject = _extract_entity_name(
             excerpts,
             preferred_tokens=("entel", "telecomunicaciones", "empresa", "sociedad", "s.a.", "sa", "transam"),

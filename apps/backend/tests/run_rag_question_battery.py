@@ -261,7 +261,7 @@ def _build_md_report(*, run_data: dict[str, Any], folder_name: str | None = None
         )
         lines.append(
             f"- respuesta_chars: `{item['answer_chars']}` | citations: `{item['citations_count']}` | "
-            f"retrieved_sources: `{item['retrieved_sources_count']}` | distinct_files: `{item['distinct_files_in_sources']}`"
+            f"evidence_sources: `{item['evidence_sources_count']}` | distinct_files: `{item['distinct_files_in_sources']}`"
         )
         if item["error"]:
             lines.append(f"- error: `{item['error']}`")
@@ -412,26 +412,26 @@ def _run_battery_for_file_ids(
 
         answer_text = ""
         citations_count = 0
-        retrieved_sources_count = 0
+        evidence_sources_count = 0
         distinct_files = 0
         top_sources: list[str] = []
         error_text = response.error_text
         if response.status_code == 200 and isinstance(response.payload, dict):
             answer_text = str(response.payload.get("answer_text") or response.payload.get("answer") or "")
             citations = response.payload.get("citations") or []
-            retrieved = response.payload.get("retrieved_sources") or response.payload.get("sources") or []
+            evidence = response.payload.get("evidence_sources") or response.payload.get("sources") or []
             citations_count = len(citations) if isinstance(citations, list) else 0
-            retrieved_sources_count = len(retrieved) if isinstance(retrieved, list) else 0
-            if isinstance(retrieved, list):
+            evidence_sources_count = len(evidence) if isinstance(evidence, list) else 0
+            if isinstance(evidence, list):
                 ids = {
                     int(item.get("file_id") or 0)
-                    for item in retrieved
+                    for item in evidence
                     if isinstance(item, dict) and int(item.get("file_id") or 0) > 0
                 }
                 distinct_files = len(ids)
                 top_sources = [
                     str(item.get("name") or item.get("file_name") or "").strip()
-                    for item in retrieved[:3]
+                    for item in evidence[:3]
                     if isinstance(item, dict)
                 ]
 
@@ -451,7 +451,7 @@ def _run_battery_for_file_ids(
             "answer_chars": len(answer_text),
             "answer_preview": answer_preview,
             "citations_count": citations_count,
-            "retrieved_sources_count": retrieved_sources_count,
+            "evidence_sources_count": evidence_sources_count,
             "distinct_files_in_sources": distinct_files,
             "precision_proxy": precision_proxy,
             "top_sources": [src for src in top_sources if src],

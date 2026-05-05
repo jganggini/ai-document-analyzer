@@ -150,16 +150,12 @@ class QuestionClassifier:
                 "segun el ocr",
                 "segun ocr",
                 "ocr del documento",
-                "ocr del contrato",
                 "texto ocr",
                 "texto extraido",
                 "texto del documento",
-                "texto contractual",
                 "contenido del documento",
-                "contenido contractual",
                 "segun el documento",
                 "segun los documentos",
-                "segun el contrato",
                 "segun el pdf",
                 "segun los pdfs",
                 "documento",
@@ -190,22 +186,14 @@ class QuestionClassifier:
                 "valores",
                 "revisar todo el documento",
                 "todo el documento",
-                "revisar todo el contrato",
-                "todo el contrato",
                 "partes",
                 "partes principales",
                 "partes involucradas",
-                "arrendador",
-                "arrendatario",
                 "firmantes",
                 "representantes",
                 "direccion",
-                "sitio",
-                "renta",
                 "precio",
-                "canon",
-                "vigencia",
-                "objeto del contrato",
+                "objeto",
             ),
         )
 
@@ -229,16 +217,12 @@ class QuestionClassifier:
             terms=(
                 "documento",
                 "documentos",
-                "contrato",
-                "contratos",
-                "modificacion",
-                "modificaciones",
+                "archivo",
+                "archivos",
                 "version",
                 "versiones",
-                "anexo",
-                "anexos",
-                "rectificacion",
-                "rectificaciones",
+                "pdf",
+                "pdfs",
             ),
         )
         if not document_family_requested:
@@ -262,7 +246,7 @@ class QuestionClassifier:
             return True
         return (
             re.search(
-                r"\bultim(?:o|a|os|as)\s+(?:documento|documentos|contrato|contratos|modificacion|modificaciones|version|versiones|anexo|anexos)\b",
+                r"\bultim(?:o|a|os|as)\s+(?:documento|documentos|archivo|archivos|version|versiones|pdf|pdfs)\b",
                 normalized,
             )
             is not None
@@ -310,8 +294,6 @@ class QuestionClassifier:
                 "evidencia documental",
                 "pdf relevantes",
                 "documento base",
-                "contrato base",
-                "modific",
                 "de donde fue extraido",
                 "dato clave",
                 "datos clave",
@@ -324,7 +306,6 @@ class QuestionClassifier:
                 "lista valor",
                 "valor",
                 "valores",
-                "instrumento vigente",
                 "gobierna",
                 "rige",
                 "representante",
@@ -351,10 +332,6 @@ class QuestionClassifier:
                 "mayor a menor",
                 "ordena",
                 "ordenalos",
-                "estado contrato",
-                "id de contrato",
-                "sociedad entel",
-                "entel pcs",
             ),
         ):
             return False
@@ -416,7 +393,6 @@ class QuestionClassifier:
                 " entre documentos",
                 "entre archivos",
                 "barrer documentos",
-                "barrer contratos",
             ),
         )
         metadata_prompt = self._contains_any(
@@ -448,30 +424,20 @@ class QuestionClassifier:
             terms=(
                 "cuantos",
                 "cuantas",
-                "cuantos sitios",
-                "cuantos contratos",
-                "cuantos ids de sitio",
-                "cuantos id de sitio",
-                "que sitios",
-                "cuales sitios",
-                "que contratos",
-                "cuales contratos",
                 "cuenta de",
                 "cantidad de",
-                "mas de un id de contrato",
+                "mas de un",
+                "mas de una",
+                "multiples",
+                "repetidos",
+                "duplicados",
                 "mas versiones documentales",
                 "versiones documentales",
                 "pdfs asociados",
                 "mayor a menor",
                 "ordena",
                 "ordenalos",
-                "top contratos",
-                "vigentes",
-                "vencidos",
-                "terminados",
-                "sociedad entel",
-                "entel pcs",
-                "entel s.a",
+                "top",
             ),
         )
         metadata_focus = self._contains_any(
@@ -479,42 +445,16 @@ class QuestionClassifier:
             terms=(
                 "metadata",
                 "metadatos",
-                "estado contrato",
-                "forma de pago",
-                "pago anticipado",
-                "periodo de pago",
-                "renta o precio vigente",
-                "renta",
-                "nombre de propietario principal",
-                "nombre beneficiario",
-                "beneficiario",
-                "propietario",
-                "rut",
-                "rut del propietario",
-                "rut del beneficiario",
-                "id de contrato",
-                "codigo de sitio",
-                "quien recibe la renta",
-                "recibe la renta",
-                "sociedad entel",
-                "figura legal",
-                "region",
-                "región",
-                "comuna",
-                "direccion",
-                "dirección",
-                "fecha de firma",
-                "nombre de sitio",
-                "sitio",
-                "sitios",
-                "estado actividad",
-                "fecha de termino",
-                "fecha de término",
-                "fecha de aviso",
-                "metros cuadrados arrendados",
-                "clausula de acceso sitio",
-                "clausula de acceso",
-                "cesion a terceros",
+                "campo",
+                "campos",
+                "columna",
+                "columnas",
+                "atributo",
+                "atributos",
+                "valor",
+                "valores",
+                "csv",
+                "tabla",
             ),
         )
         metadata_validation_requested = (metadata_focus or metadata_prompt or explicit_archive_reference) and self._contains_any(
@@ -576,11 +516,8 @@ class QuestionClassifier:
             normalized=normalized,
             terms=(
                 "ultima modificacion",
-                "ultimo contrato vigente",
-                "ultima rectificacion",
                 "ultima version",
                 "ultimas modificaciones",
-                "ultimo anexo",
                 "modificaciones tiene",
                 "que cambio",
                 "que cambios",
@@ -633,7 +570,16 @@ class QuestionClassifier:
         )
         document_content_requested = self._contains_document_content_request(normalized=normalized)
 
-        if "si hoy es" in normalized or ("vigencia" in normalized and "cuanto tiempo" in normalized):
+        if "si hoy es" in normalized or (
+            self._contains_any(
+                normalized=normalized,
+                terms=("cuanto tiempo", "cuantos dias", "cuantas semanas", "cuantos meses"),
+            )
+            and self._contains_any(
+                normalized=normalized,
+                terms=("resta", "queda", "faltan", "vence", "vencimiento", "termina", "finaliza"),
+            )
+        ):
             return QuestionClassification(question_class="temporal", rationale="reference-date")
 
         if document_content_requested:
@@ -654,17 +600,14 @@ class QuestionClassifier:
         if comparison_requested and metadata_focus and self._contains_any(
             normalized=normalized,
             terms=(
-                "estado contrato",
-                "id de contrato",
-                "codigo de sitio",
-                "rut",
-                "beneficiario",
-                "propietario",
-                "forma de pago",
-                "renta",
-                "cesion a terceros",
-                "acceso al terreno",
-                "clausula de acceso",
+                "campo",
+                "campos",
+                "columna",
+                "columnas",
+                "atributo",
+                "atributos",
+                "valor",
+                "valores",
             ),
         ):
             return QuestionClassification(
@@ -678,18 +621,14 @@ class QuestionClassifier:
             or self._contains_any(
                 normalized=normalized,
                 terms=(
-                    "id de contrato",
-                    "estado contrato",
                     "versiones documentales",
                     "pdfs asociados",
-                    "sociedad entel",
-                    "entel pcs",
-                    "entel s.a",
-                    "region",
-                    "región",
-                    "comuna",
-                    "sitio",
-                    "sitios",
+                    "campo",
+                    "campos",
+                    "columna",
+                    "columnas",
+                    "atributo",
+                    "atributos",
                 ),
             )
         ):
@@ -739,13 +678,9 @@ class QuestionClassifier:
             terms=(
                 "genera un analisis",
                 "analiza",
-                "analiza los contratos",
                 "analisis",
-                "analisis de los contratos",
                 "resume",
-                "resume los contratos",
                 "resumen",
-                "resumen de los contratos",
             ),
         ):
             return QuestionClassification(question_class="exhaustive_synthesis", rationale="open-ended-multi-doc")

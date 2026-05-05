@@ -7,7 +7,7 @@ from apps.backend.app.core import oci_db_config
 from apps.backend.app.services.bootstrap_service import SetupService
 
 
-class _FakeCursor:
+class _StubCursor:
     def __init__(self, rows: list[tuple[str, str]]) -> None:
         self._rows = rows
 
@@ -21,23 +21,23 @@ class _FakeCursor:
         return None
 
 
-class _FakeConnection:
+class _StubConnection:
     def __init__(self, rows: list[tuple[str, str]]) -> None:
         self._rows = rows
 
-    def cursor(self) -> _FakeCursor:
-        return _FakeCursor(self._rows)
+    def cursor(self) -> _StubCursor:
+        return _StubCursor(self._rows)
 
     def close(self) -> None:
         return None
 
 
-class _FakeDbManager:
+class _StubDbManager:
     def __init__(self, rows: list[tuple[str, str]]) -> None:
         self._rows = rows
 
-    def get_connection(self) -> _FakeConnection:
-        return _FakeConnection(self._rows)
+    def get_connection(self) -> _StubConnection:
+        return _StubConnection(self._rows)
 
 
 def test_load_oci_config_resolves_windows_key_file_from_backend_keys_dir(tmp_path, monkeypatch) -> None:
@@ -53,7 +53,7 @@ def test_load_oci_config_resolves_windows_key_file_from_backend_keys_dir(tmp_pat
         raising=False,
     )
 
-    db_manager = _FakeDbManager(
+    db_manager = _StubDbManager(
         [
             ("oci.user", "ocid1.user"),
             ("oci.fingerprint", "fp"),

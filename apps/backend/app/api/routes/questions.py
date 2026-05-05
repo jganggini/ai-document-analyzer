@@ -171,17 +171,17 @@ def _load_visible_scope_options(*, repository: FileRepository, user_id: int) -> 
     )
 
     upload_column_fields: list[str] = []
-    legacy_metadata_fields: list[str] = []
+    persisted_metadata_fields: list[str] = []
     try:
         metadata_rows = list(repository.list_archive_metadata_for_user(user_id=int(user_id), include_shared=True))
     except Exception:
         metadata_rows = []
     for row in metadata_rows:
         upload_column_fields.extend(_extract_metadata_upload_columns(row.get("column_names_json")))
-        legacy_metadata_fields.extend(_extract_metadata_json_fields(row.get("metadata_json")))
+        persisted_metadata_fields.extend(_extract_metadata_json_fields(row.get("metadata_json")))
     metadata_fields = _normalize_metadata_fields(upload_column_fields)
     if not metadata_fields:
-        metadata_fields = _normalize_metadata_fields(legacy_metadata_fields)
+        metadata_fields = _normalize_metadata_fields(persisted_metadata_fields)
 
     return ScopeOptionsResponse(
         files=files,
@@ -342,11 +342,11 @@ def _resolve_effective_chat_history(
     return conversation_history if conversation_history else request_history
 
 
-def _build_citations_and_sources(
+def _build_citations_and_cited_sources(
     *,
     analyzed_evidence: list,
     citation_numbers: list[int],
-) -> tuple[list[CitationItem], list[SourceItem], list[SourceItem], list[SourceItem]]:
+) -> tuple[list[CitationItem], list[SourceItem]]:
     def _to_source_items(items: list) -> list[SourceItem]:
         return [
             SourceItem(
@@ -378,17 +378,13 @@ def _build_citations_and_sources(
         for item in cited_items
     ]
     cited_sources = _to_source_items(cited_items)
-    retrieved_sources = _to_source_items(list(analyzed_evidence or []))
-    # Backward-compatible field for existing clients: expose full retrieved set to avoid
-    # hiding multi-document coverage when citation subset is small.
-    sources = retrieved_sources if retrieved_sources else cited_sources
-    return citations, sources, cited_sources, retrieved_sources
+    return citations, cited_sources
 
 
 def _build_ask_response_from_execution(execution) -> AskQuestionResponse:
     analyzed_evidence = execution.evidence
     enriched_answer = execution.answer
-    citations, sources, cited_sources, retrieved_sources = _build_citations_and_sources(
+    citations, cited_sources = _build_citations_and_cited_sources(
         analyzed_evidence=analyzed_evidence,
         citation_numbers=list(enriched_answer.citation_source_numbers or []),
     )
@@ -399,9 +395,7 @@ def _build_ask_response_from_execution(execution) -> AskQuestionResponse:
         key_points=enriched_answer.key_points,
         obligations=enriched_answer.obligations,
         citations=citations,
-        sources=sources,
         cited_sources=cited_sources,
-        retrieved_sources=retrieved_sources,
         model_used=enriched_answer.model_used,
         strategy=execution.strategy,
         answer_mode=execution.answer_mode,
@@ -428,7 +422,7 @@ def _build_ask_response_from_stream_payload(payload: dict) -> AskQuestionRespons
         for item in list(answer.get("citation_source_numbers") or [])
         if isinstance(item, int) or (isinstance(item, str) and str(item).isdigit())
     ]
-    citations, sources, cited_sources, retrieved_sources = _build_citations_and_sources(
+    citations, cited_sources = _build_citations_and_cited_sources(
         analyzed_evidence=evidence_items,
         citation_numbers=citation_numbers,
     )
@@ -439,9 +433,7 @@ def _build_ask_response_from_stream_payload(payload: dict) -> AskQuestionRespons
         key_points=[str(item) for item in list(answer.get("key_points") or [])],
         obligations=[str(item) for item in list(answer.get("obligations") or [])],
         citations=citations,
-        sources=sources,
         cited_sources=cited_sources,
-        retrieved_sources=retrieved_sources,
         model_used=str(answer.get("model_used") or ""),
         strategy=str(payload.get("strategy") or ""),
         answer_mode=str(payload.get("answer_mode") or ""),

@@ -460,14 +460,14 @@ def _run_question(
     payload = response.payload if isinstance(response.payload, dict) else {}
     answer_text = str(payload.get("answer_text") or payload.get("answer") or "")
     citations = payload.get("citations") if isinstance(payload.get("citations"), list) else []
-    retrieved_sources = (
-        payload.get("retrieved_sources")
-        if isinstance(payload.get("retrieved_sources"), list)
+    evidence_sources = (
+        payload.get("evidence_sources")
+        if isinstance(payload.get("evidence_sources"), list)
         else (payload.get("sources") if isinstance(payload.get("sources"), list) else [])
     )
     source_names = [
         str(item.get("name") or item.get("file_name") or "").strip()
-        for item in retrieved_sources
+        for item in evidence_sources
         if isinstance(item, dict) and str(item.get("name") or item.get("file_name") or "").strip()
     ]
     precision_score, diagnostics = _derive_precision_score(
@@ -489,8 +489,8 @@ def _run_question(
         "answer_text": answer_text,
         "answer_preview": _short_text(answer_text, limit=420),
         "citations_count": len(citations),
-        "retrieved_sources_count": len(retrieved_sources),
-        "retrieved_source_names": source_names[:8],
+        "evidence_sources_count": len(evidence_sources),
+        "evidence_source_names": source_names[:8],
         "telemetry": dict(payload.get("telemetry") or {}),
         "error": response.error_text,
         "precision_score": precision_score,
@@ -578,8 +578,8 @@ def _build_question_consistency(*, passes: list[dict[str, Any]]) -> list[dict[st
                 similarities.append(_answer_similarity(left["answer_text"], right["answer_text"]))
                 overlaps.append(
                     _source_overlap(
-                        left.get("retrieved_source_names") or [],
-                        right.get("retrieved_source_names") or [],
+                        left.get("evidence_source_names") or [],
+                        right.get("evidence_source_names") or [],
                     )
                 )
         summary.append(
@@ -678,7 +678,7 @@ def _build_markdown_report(*, payload: dict[str, Any]) -> str:
             lines.append(
                 f"- {pass_result['label']}: status=`{item['status_code']}` | elapsed=`{item['elapsed_ms']} ms` | "
                 f"strategy=`{item['strategy'] or '-'}` | precision=`{item['precision_score']}` | "
-                f"citations=`{item['citations_count']}` | retrieved=`{item['retrieved_sources_count']}`"
+                f"citations=`{item['citations_count']}` | evidence=`{item['evidence_sources_count']}`"
             )
             if item["term_hits"] or item["term_misses"]:
                 lines.append(
@@ -690,8 +690,8 @@ def _build_markdown_report(*, payload: dict[str, Any]) -> str:
                     f"- {pass_result['label']} source_hits=`{', '.join(item['source_hits']) or '-'}` | "
                     f"source_misses=`{', '.join(item['source_misses']) or '-'}`"
                 )
-            if item["retrieved_source_names"]:
-                lines.append(f"- {pass_result['label']} top_sources: {', '.join(item['retrieved_source_names'][:4])}")
+            if item["evidence_source_names"]:
+                lines.append(f"- {pass_result['label']} top_sources: {', '.join(item['evidence_source_names'][:4])}")
             if item["error"]:
                 lines.append(f"- {pass_result['label']} error: `{item['error']}`")
             lines.append(f"- {pass_result['label']} answer_preview: {item['answer_preview'] or '-'}")

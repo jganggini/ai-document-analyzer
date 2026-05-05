@@ -13,8 +13,9 @@ def _route_after_classification(state: QAGraphState) -> str:
     return "search_response" if route == "search" else "resolve_scope"
 
 
-def _route_after_facts(state: QAGraphState) -> str:
-    return "synthesize_document_answer" if bool(state.get("skip_retrieval")) else "retrieve_candidates"
+def _route_after_answerability(state: QAGraphState) -> str:
+    route = str(state.get("answerability_route") or "").strip().lower()
+    return "synthesize_document_answer" if route == "metadata" else "retrieve_candidates"
 
 
 def build_qa_graph(*, nodes: QAGraphNodes, checkpointer=None):
@@ -24,6 +25,7 @@ def build_qa_graph(*, nodes: QAGraphNodes, checkpointer=None):
     graph_builder.add_node("resolve_scope", nodes.resolve_scope)
     graph_builder.add_node("classify_question", nodes.classify_question)
     graph_builder.add_node("resolve_facts", nodes.resolve_facts)
+    graph_builder.add_node("decide_answerability", nodes.decide_answerability)
     graph_builder.add_node("retrieve_candidates", nodes.retrieve_candidates)
     graph_builder.add_node("fuse_page_evidence", nodes.fuse_page_evidence)
     graph_builder.add_node("maybe_verify_visual", nodes.maybe_verify_visual)
@@ -42,9 +44,10 @@ def build_qa_graph(*, nodes: QAGraphNodes, checkpointer=None):
     graph_builder.add_edge("search_response", "persist_turn")
     graph_builder.add_edge("resolve_scope", "classify_question")
     graph_builder.add_edge("classify_question", "resolve_facts")
+    graph_builder.add_edge("resolve_facts", "decide_answerability")
     graph_builder.add_conditional_edges(
-        "resolve_facts",
-        _route_after_facts,
+        "decide_answerability",
+        _route_after_answerability,
         {
             "retrieve_candidates": "retrieve_candidates",
             "synthesize_document_answer": "synthesize_document_answer",

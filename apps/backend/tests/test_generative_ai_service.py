@@ -32,29 +32,29 @@ def test_resolve_structured_output_method_prefers_json_schema_for_gemini() -> No
     )
 
 
-def test_invoke_structured_uses_json_schema_for_gemini_without_raw_fallback(
+def test_invoke_structured_uses_json_schema_for_gemini_without_raw_default_value(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     records: dict[str, int | str] = {}
 
-    class _FakeChain:
+    class _StubChain:
         def invoke(self, _prompt: str) -> dict[str, str]:
             records["chain_invocations"] = int(records.get("chain_invocations", 0)) + 1
             return {"value": "ok"}
 
-    class _FakeChat:
+    class _StubChat:
         def __init__(self, **_kwargs) -> None:
             pass
 
         def with_structured_output(self, _schema, *, method: str = "function_calling", **_kwargs):
             records["method"] = method
-            return _FakeChain()
+            return _StubChain()
 
         def invoke(self, *_args, **_kwargs):
             records["raw_invocations"] = int(records.get("raw_invocations", 0)) + 1
             return {"value": "raw"}
 
-    monkeypatch.setattr(generative_ai, "ChatOCIGenAI", _FakeChat)
+    monkeypatch.setattr(generative_ai, "ChatOCIGenAI", _StubChat)
 
     service = OCIGenerativeAIService(settings=get_settings())
     monkeypatch.setattr(
@@ -83,29 +83,29 @@ def test_invoke_structured_uses_json_schema_for_gemini_without_raw_fallback(
     assert records.get("raw_invocations", 0) == 0
 
 
-def test_invoke_structured_raises_after_invalid_payload_without_raw_fallback(
+def test_invoke_structured_raises_after_invalid_payload_without_raw_default_value(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     records: dict[str, int | str] = {}
 
-    class _FakeChain:
+    class _StubChain:
         def invoke(self, _prompt: str) -> dict[str, str]:
             records["chain_invocations"] = int(records.get("chain_invocations", 0)) + 1
             return {"value": "bad"}
 
-    class _FakeChat:
+    class _StubChat:
         def __init__(self, **_kwargs) -> None:
             pass
 
         def with_structured_output(self, _schema, *, method: str = "function_calling", **_kwargs):
             records["method"] = method
-            return _FakeChain()
+            return _StubChain()
 
         def invoke(self, *_args, **_kwargs):
             records["raw_invocations"] = int(records.get("raw_invocations", 0)) + 1
             return {"value": "raw"}
 
-    monkeypatch.setattr(generative_ai, "ChatOCIGenAI", _FakeChat)
+    monkeypatch.setattr(generative_ai, "ChatOCIGenAI", _StubChat)
 
     service = OCIGenerativeAIService(settings=get_settings())
     service.STRUCTURED_MAX_RETRIES = 2
@@ -136,34 +136,34 @@ def test_invoke_structured_raises_after_invalid_payload_without_raw_fallback(
     assert records.get("raw_invocations", 0) == 0
 
 
-def test_invoke_multimodal_structured_uses_json_schema_without_raw_fallback(
+def test_invoke_multimodal_structured_uses_json_schema_without_raw_default_value(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     records: dict[str, int | str] = {}
 
-    class _FakeHumanMessage:
+    class _StubHumanMessage:
         def __init__(self, content) -> None:
             self.content = content
 
-    class _FakeChain:
+    class _StubChain:
         def invoke(self, _messages) -> dict[str, str]:
             records["chain_invocations"] = int(records.get("chain_invocations", 0)) + 1
             return {"summary": "ok"}
 
-    class _FakeChat:
+    class _StubChat:
         def __init__(self, **_kwargs) -> None:
             pass
 
         def with_structured_output(self, _schema, *, method: str = "function_calling", **_kwargs):
             records["method"] = method
-            return _FakeChain()
+            return _StubChain()
 
         def invoke(self, *_args, **_kwargs):
             records["raw_invocations"] = int(records.get("raw_invocations", 0)) + 1
             return {"summary": "raw"}
 
-    monkeypatch.setattr(generative_ai, "ChatOCIGenAI", _FakeChat)
-    monkeypatch.setattr(generative_ai, "HumanMessage", _FakeHumanMessage)
+    monkeypatch.setattr(generative_ai, "ChatOCIGenAI", _StubChat)
+    monkeypatch.setattr(generative_ai, "HumanMessage", _StubHumanMessage)
 
     service = OCIGenerativeAIService(settings=get_settings())
     monkeypatch.setattr(

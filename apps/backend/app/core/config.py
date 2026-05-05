@@ -161,15 +161,15 @@ class Settings(BaseSettings):
     def user_data_root(self) -> Path:
         return self.data_dir / "users" / self.user_runtime_scope
 
-    def _runtime_config_int(self, key: str, fallback: int) -> int:
+    def _runtime_config_int(self, key: str, default_value: int) -> int:
         try:
             from apps.backend.app.core.session import get_db_manager
             from apps.backend.app.services.runtime_config_service import ConfigService
 
-            raw_value = ConfigService(get_db_manager()).get_value(key, str(fallback)).strip()
+            raw_value = ConfigService(get_db_manager()).get_value(key, str(default_value)).strip()
             return int(raw_value)
         except Exception:
-            return int(fallback)
+            return int(default_value)
 
     @property
     def oci_genai_compartment_id(self) -> str:
@@ -182,11 +182,6 @@ class Settings(BaseSettings):
     @property
     def oci_genai_model(self) -> str:
         return "google.gemini-2.5-flash"
-
-    @property
-    def oci_genai_model_fast(self) -> str:
-        # Alias legacy para mantener compatibilidad interna.
-        return self.oci_genai_model
 
     @property
     def document_understanding_live_enabled(self) -> bool:
@@ -252,20 +247,6 @@ class Settings(BaseSettings):
     @property
     def oci_genai_is_configured(self) -> bool:
         return bool(self.oci_config_file.exists())
-
-    @property
-    def document_understanding_is_configured(self) -> bool:
-        # Retained for legacy callers; no cloud OCR setup is required.
-        return False
-
-    # Compatibilidad con nombres legacy usados en tests
-    @property
-    def ora26ai_app_user(self) -> str:
-        return self.ADB_USER
-
-    @property
-    def ora26ai_app_password(self) -> str:
-        return self.ADB_PASSWORD
 
     @property
     def ora26ai_tns_alias(self) -> str:

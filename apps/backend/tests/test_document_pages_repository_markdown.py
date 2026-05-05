@@ -5,7 +5,7 @@ import pytest
 from apps.backend.app.repositories.document_pages_repository import FilePagesRepository
 
 
-class _FakeLob:
+class _StubLob:
     def __init__(self, value: str) -> None:
         self.value = value
 
@@ -13,7 +13,7 @@ class _FakeLob:
         return self.value
 
 
-class _FakeCursor:
+class _StubCursor:
     def __init__(self, rows: list[tuple[object, object]]) -> None:
         self.rows = rows
         self.executed_sql: list[str] = []
@@ -30,35 +30,35 @@ class _FakeCursor:
         self.closed = True
 
 
-class _FakeConnection:
-    def __init__(self, cursor: _FakeCursor) -> None:
+class _StubConnection:
+    def __init__(self, cursor: _StubCursor) -> None:
         self._cursor = cursor
         self.closed = False
 
-    def cursor(self) -> _FakeCursor:
+    def cursor(self) -> _StubCursor:
         return self._cursor
 
     def close(self) -> None:
         self.closed = True
 
 
-class _FakeDbManager:
-    def __init__(self, connection: _FakeConnection) -> None:
+class _StubDbManager:
+    def __init__(self, connection: _StubConnection) -> None:
         self._connection = connection
 
-    def get_connection(self) -> _FakeConnection:
+    def get_connection(self) -> _StubConnection:
         return self._connection
 
 
 def test_file_markdown_reads_markdown_column_instead_of_ocr_text() -> None:
-    cursor = _FakeCursor(
+    cursor = _StubCursor(
         rows=[
-            (1, _FakeLob("# Extracted title\n\n| A | B |\n| - | - |\n| 1 | 2 |")),
+            (1, _StubLob("# Extracted title\n\n| A | B |\n| - | - |\n| 1 | 2 |")),
             (2, "Second page paragraph"),
         ]
     )
-    connection = _FakeConnection(cursor)
-    repository = FilePagesRepository(_FakeDbManager(connection))
+    connection = _StubConnection(cursor)
+    repository = FilePagesRepository(_StubDbManager(connection))
 
     markdown = repository.get_file_markdown(file_id=7)
 
@@ -71,9 +71,9 @@ def test_file_markdown_reads_markdown_column_instead_of_ocr_text() -> None:
 
 
 def test_file_markdown_raises_when_markdown_artifact_is_missing() -> None:
-    cursor = _FakeCursor(rows=[(1, None)])
-    connection = _FakeConnection(cursor)
-    repository = FilePagesRepository(_FakeDbManager(connection))
+    cursor = _StubCursor(rows=[(1, None)])
+    connection = _StubConnection(cursor)
+    repository = FilePagesRepository(_StubDbManager(connection))
 
     with pytest.raises(RuntimeError, match="Markdown extraction is missing"):
         repository.get_file_markdown(file_id=7)

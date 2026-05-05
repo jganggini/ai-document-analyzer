@@ -38,7 +38,7 @@ class HybridAnswerTool:
 
     name: str = "hybrid_answer_consolidation"
     description: str = (
-        "Consolidate retrieved evidence (OCR + optional visual checks) and produce "
+        "Consolidate selected document evidence (OCR + optional visual checks) and produce "
         "a grounded final answer."
     )
     result_as_answer: bool = True

@@ -27,6 +27,7 @@ from apps.backend.app.api.routes import (
     documents,
     file,
     health,
+    improvement,
     metadata,
     questions,
     settings as settings_route,
@@ -154,6 +155,7 @@ app.include_router(health.router, prefix="/api")
 app.include_router(config.router, prefix="/api")
 app.include_router(settings_route.router, prefix="/api")
 app.include_router(documents.router, prefix="/api")
+app.include_router(improvement.router, prefix="/api")
 app.include_router(metadata.router, prefix="/api")
 app.include_router(questions.router, prefix="/api")
 app.include_router(chats.router, prefix="/api")

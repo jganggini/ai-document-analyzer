@@ -381,6 +381,42 @@ body {
     padding-box;
 }
 
+.app-scrollbar,
+.chat-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(77, 77, 77, 0.38) transparent;
+  scrollbar-gutter: stable;
+}
+
+.app-scrollbar::-webkit-scrollbar,
+.chat-scrollbar::-webkit-scrollbar {
+  width: 0.625rem;
+  height: 0.625rem;
+}
+
+.app-scrollbar::-webkit-scrollbar-track,
+.chat-scrollbar::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: transparent;
+}
+
+.app-scrollbar::-webkit-scrollbar-thumb,
+.chat-scrollbar::-webkit-scrollbar-thumb {
+  min-height: 3rem;
+  border: 0.1875rem solid transparent;
+  border-radius: 999px;
+  background:
+    linear-gradient(rgba(77, 77, 77, 0.34), rgba(77, 77, 77, 0.34))
+    padding-box;
+}
+
+.app-scrollbar::-webkit-scrollbar-thumb:hover,
+.chat-scrollbar::-webkit-scrollbar-thumb:hover {
+  background:
+    linear-gradient(rgba(77, 77, 77, 0.48), rgba(77, 77, 77, 0.48))
+    padding-box;
+}
+
 .app-shell-dark .bg-oracle-bg-gray,
 .setup-shell-dark .bg-oracle-bg-gray {
   background-color: rgba(255, 255, 255, 0.045) !important;

@@ -81,12 +81,12 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _metadata_value(row: dict[str, str], *keys: str, fallback: str = "") -> str:
+def _metadata_value(row: dict[str, str], *keys: str, default_value: str = "") -> str:
     for key in keys:
         value = str(row.get(key) or "").strip()
         if value:
             return value
-    return fallback
+    return default_value
 
 
 def _short_name(file_name: str) -> str:
@@ -123,12 +123,12 @@ def _build_same_archive_specs(
     if len(source_names) < 3:
         raise RuntimeError(f"Archive {archive_slug} requires at least 3 completed documents for same-folio checks.")
 
-    state = _metadata_value(metadata_row, "Estado Contrato", fallback="desconocido")
-    payment = _metadata_value(metadata_row, "Forma de Pago", fallback="desconocido")
-    owner = _metadata_value(metadata_row, "Nombre de Propietario Principal", fallback="desconocido")
-    beneficiary = _metadata_value(metadata_row, "Nombre Beneficiario", fallback="desconocido")
-    comuna = _metadata_value(metadata_row, "Comuna", fallback="desconocida")
-    address = _metadata_value(metadata_row, "Dirección", "Direccion", fallback="desconocida")
+    state = _metadata_value(metadata_row, "Estado Contrato", default_value="desconocido")
+    payment = _metadata_value(metadata_row, "Forma de Pago", default_value="desconocido")
+    owner = _metadata_value(metadata_row, "Nombre de Propietario Principal", default_value="desconocido")
+    beneficiary = _metadata_value(metadata_row, "Nombre Beneficiario", default_value="desconocido")
+    comuna = _metadata_value(metadata_row, "Comuna", default_value="desconocida")
+    address = _metadata_value(metadata_row, "Dirección", "Direccion", default_value="desconocida")
     doc_a, doc_b, doc_c = source_names
 
     return [
@@ -184,16 +184,16 @@ def _build_pair_specs(
     source_b = _pick_source_names(file_names_b, count=2)
     source_fragments = source_a + source_b
 
-    state_a = _metadata_value(row_a, "Estado Contrato", fallback="desconocido")
-    state_b = _metadata_value(row_b, "Estado Contrato", fallback="desconocido")
-    payment_a = _metadata_value(row_a, "Forma de Pago", fallback="desconocido")
-    payment_b = _metadata_value(row_b, "Forma de Pago", fallback="desconocido")
-    owner_a = _metadata_value(row_a, "Nombre de Propietario Principal", fallback="desconocido")
-    owner_b = _metadata_value(row_b, "Nombre de Propietario Principal", fallback="desconocido")
-    beneficiary_a = _metadata_value(row_a, "Nombre Beneficiario", fallback="desconocido")
-    beneficiary_b = _metadata_value(row_b, "Nombre Beneficiario", fallback="desconocido")
-    end_a = _metadata_value(row_a, "Fecha de Término del Contrato", "Fecha de Termino del Contrato", fallback="")
-    end_b = _metadata_value(row_b, "Fecha de Término del Contrato", "Fecha de Termino del Contrato", fallback="")
+    state_a = _metadata_value(row_a, "Estado Contrato", default_value="desconocido")
+    state_b = _metadata_value(row_b, "Estado Contrato", default_value="desconocido")
+    payment_a = _metadata_value(row_a, "Forma de Pago", default_value="desconocido")
+    payment_b = _metadata_value(row_b, "Forma de Pago", default_value="desconocido")
+    owner_a = _metadata_value(row_a, "Nombre de Propietario Principal", default_value="desconocido")
+    owner_b = _metadata_value(row_b, "Nombre de Propietario Principal", default_value="desconocido")
+    beneficiary_a = _metadata_value(row_a, "Nombre Beneficiario", default_value="desconocido")
+    beneficiary_b = _metadata_value(row_b, "Nombre Beneficiario", default_value="desconocido")
+    end_a = _metadata_value(row_a, "Fecha de Término del Contrato", "Fecha de Termino del Contrato", default_value="")
+    end_b = _metadata_value(row_b, "Fecha de Término del Contrato", "Fecha de Termino del Contrato", default_value="")
 
     return [
         QuestionSpec(
@@ -419,7 +419,7 @@ def _build_markdown_report(*, payload: dict[str, Any]) -> str:
             lines.append(
                 f"- {pass_result['label']}: status=`{item['status_code']}` | elapsed=`{item['elapsed_ms']} ms` | "
                 f"strategy=`{item['strategy'] or '-'}` | precision=`{item['precision_score']}` | "
-                f"citations=`{item['citations_count']}` | retrieved=`{item['retrieved_sources_count']}`"
+                f"citations=`{item['citations_count']}` | evidence=`{item['evidence_sources_count']}`"
             )
             if item["term_hits"] or item["term_misses"]:
                 lines.append(
@@ -431,8 +431,8 @@ def _build_markdown_report(*, payload: dict[str, Any]) -> str:
                     f"- {pass_result['label']} source_hits=`{', '.join(item['source_hits']) or '-'}` | "
                     f"source_misses=`{', '.join(item['source_misses']) or '-'}`"
                 )
-            if item["retrieved_source_names"]:
-                lines.append(f"- {pass_result['label']} top_sources: {', '.join(item['retrieved_source_names'][:4])}")
+            if item["evidence_source_names"]:
+                lines.append(f"- {pass_result['label']} top_sources: {', '.join(item['evidence_source_names'][:4])}")
             if item["error"]:
                 lines.append(f"- {pass_result['label']} error: `{item['error']}`")
             lines.append(f"- {pass_result['label']} answer_preview: {item['answer_preview'] or '-'}")

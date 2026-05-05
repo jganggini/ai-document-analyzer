@@ -13,7 +13,7 @@ def test_default_payload_omits_retired_file_types_block() -> None:
 
 
 def test_build_payload_ignores_retired_keys(monkeypatch) -> None:
-    class _FakeConfigService:
+    class _StubConfigService:
         def list_grouped(self) -> dict[str, list[dict[str, str]]]:
             return {
                 "rag": [
@@ -29,7 +29,7 @@ def test_build_payload_ignores_retired_keys(monkeypatch) -> None:
 
     monkeypatch.setattr(settings_route, "_resolve_avatar_file", lambda: None)
 
-    payload = settings_route._build_payload(_FakeConfigService())
+    payload = settings_route._build_payload(_StubConfigService())
 
     assert "file_types" not in payload
     assert payload["rag"]["retrieval.doc_shortlist_scoped"] == 7
@@ -39,8 +39,8 @@ def test_build_payload_ignores_retired_keys(monkeypatch) -> None:
     assert payload["app"]["avatar_url"] == ""
 
 
-def test_build_payload_keeps_legacy_agent_name_out_of_application_name(monkeypatch) -> None:
-    class _FakeConfigService:
+def test_build_payload_keeps_configured_application_name(monkeypatch) -> None:
+    class _StubConfigService:
         def list_grouped(self) -> dict[str, list[dict[str, str]]]:
             return {
                 "app": [
@@ -50,7 +50,7 @@ def test_build_payload_keeps_legacy_agent_name_out_of_application_name(monkeypat
 
     monkeypatch.setattr(settings_route, "_resolve_avatar_file", lambda: None)
 
-    payload = settings_route._build_payload(_FakeConfigService())
+    payload = settings_route._build_payload(_StubConfigService())
 
-    assert payload["app"]["name"] == "AI Document Analyzer"
+    assert payload["app"]["name"] == "Nadia Assist"
     assert payload["app"]["agent_name"] == "Nadia Assist"

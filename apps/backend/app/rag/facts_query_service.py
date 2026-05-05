@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import calendar
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -159,115 +158,7 @@ _METADATA_OPEN_ANSWER_TOKENS = {
 }
 _BOOLEAN_TRUE = {"1", "si", "s\u00ed", "true", "yes"}
 _BOOLEAN_FALSE = {"0", "false", "no"}
-_METADATA_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
-    "nombre de propietario principal": (
-        "propietario principal",
-        "dueno principal",
-        "arrendador principal",
-        "nombre del propietario",
-        "quien es el propietario",
-    ),
-    "rut propietario principal": (
-        "rut del propietario principal",
-        "rut propietario principal",
-        "rut del propietario",
-        "rut propietario",
-    ),
-    "nombre beneficiario": (
-        "beneficiario actual",
-        "beneficiario",
-        "arrendatario actual",
-        "quien recibe la renta",
-        "recibe la renta",
-        "quien recibe el pago",
-    ),
-    "rut beneficiario del contrato": (
-        "rut del beneficiario",
-        "rut beneficiario",
-        "rut de quien recibe la renta",
-        "rut de quien recibe el pago",
-    ),
-    "id": (
-        "id de contrato",
-        "id contrato",
-        "numero de contrato",
-    ),
-    "codigo de sitio": (
-        "codigo de sitio",
-        "sitio",
-        "codigo sitio",
-    ),
-    "figura legal": (
-        "sociedad entel",
-        "entel pcs",
-        "entel s.a",
-        "sociedad firmante",
-        "figura legal",
-    ),
-    "estado contrato": (
-        "estado del contrato",
-        "contrato vigente",
-        "sigue vigente",
-        "sigue activo",
-        "contrato activo",
-        "vigencia del contrato",
-    ),
-    "forma de pago": (
-        "medio de pago",
-        "modo de pago",
-    ),
-    "pago anticipado": (
-        "pago adelantado",
-        "prepago",
-    ),
-    "periodo de pago": (
-        "periodicidad de pago",
-        "cada cuanto se paga",
-    ),
-    "renta o precio vigente": (
-        "renta vigente",
-        "precio vigente",
-        "valor vigente",
-        "renta",
-    ),
-    "metros cuadrados arrendados": (
-        "superficie arrendada",
-        "m2 arrendados",
-        "metros arrendados",
-    ),
-    "clausula de acceso sitio": (
-        "acceso al sitio",
-        "clausula de acceso",
-        "acceso al terreno",
-    ),
-    "cesion a terceros": (
-        "cesion a terceros",
-        "cede a terceros",
-        "ceder a terceros",
-        "libre cesion",
-    ),
-    "fecha de firma primer contrato": (
-        "primer contrato",
-        "fecha del primer contrato",
-    ),
-    "fecha firma ultimo contrato": (
-        "ultimo contrato",
-        "fecha del ultimo contrato",
-        "ultima firma",
-    ),
-    "fecha de termino del contrato": (
-        "fecha de termino",
-        "termino del contrato",
-        "vencimiento del contrato",
-        "fecha de vencimiento",
-    ),
-    "fecha de aviso de termino del contrato": (
-        "aviso de termino",
-        "carta de termino",
-        "aviso previo de termino",
-    ),
-}
-
+_METADATA_FIELD_ALIASES: dict[str, tuple[str, ...]] = {}
 
 @dataclass(slots=True)
 class FactResolution:
@@ -382,7 +273,7 @@ class QuestionFactResolver:
                     "Document inventory was not used as a final answer because the question filters documents by content."
                 ],
                 document_phase_required=True,
-                answerability_route="documents_only",
+                answerability_route="documents",
             )
 
         if question_class == "inventory" or self._question_requests_document_inventory_listing(question):
@@ -641,69 +532,11 @@ class QuestionFactResolver:
         file_ids: list[int],
         reference_date: date,
     ) -> FactResolution:
-        normalized = self._normalize_text(question)
         metadata_rows = self._load_archive_metadata_rows(
             user_id=user_id,
             file_ids=file_ids,
         )
         resolved_metadata_file_ids = [row.file_id for row in metadata_rows if row.file_id > 0]
-
-        if metadata_rows and self._question_targets_sites_with_multiple_contract_ids(question):
-            answer, facts_used_count = self._build_multi_contract_site_answer(metadata_rows=metadata_rows)
-            return FactResolution(
-                narrowed_file_ids=resolved_metadata_file_ids,
-                fact_context_text=answer,
-                answer_override=answer,
-                facts_used_count=facts_used_count,
-                confidence_notes=["Analytics answered directly from canonical CSV metadata rows."],
-                metadata_phase_used=True,
-                resolved_archive_slugs=[row.archive_slug for row in metadata_rows if str(row.archive_slug).strip()],
-                metadata_only_reason="metadata_analytics",
-            )
-
-        if metadata_rows and self._question_targets_contract_state_counts(question):
-            answer, facts_used_count = self._build_contract_state_counts_answer(metadata_rows=metadata_rows)
-            return FactResolution(
-                narrowed_file_ids=resolved_metadata_file_ids,
-                fact_context_text=answer,
-                answer_override=answer,
-                facts_used_count=facts_used_count,
-                confidence_notes=["Contract state counts were resolved directly from canonical CSV metadata rows."],
-                metadata_phase_used=True,
-                resolved_archive_slugs=[row.archive_slug for row in metadata_rows if str(row.archive_slug).strip()],
-                metadata_only_reason="metadata_analytics",
-            )
-
-        if self._question_targets_top_document_versions(question):
-            answer, facts_used_count = self._build_top_document_versions_answer(
-                user_id=user_id,
-                file_ids=file_ids,
-            )
-            if answer:
-                return FactResolution(
-                    narrowed_file_ids=list(file_ids or []),
-                    fact_context_text=answer,
-                    answer_override=answer,
-                    facts_used_count=facts_used_count,
-                    confidence_notes=["Document version counts were resolved directly from the processed file inventory."],
-                )
-
-        if metadata_rows and self._question_targets_entel_figure_count(question):
-            answer, facts_used_count = self._build_entel_figure_count_answer(
-                question=question,
-                metadata_rows=metadata_rows,
-            )
-            if answer:
-                return FactResolution(
-                    narrowed_file_ids=resolved_metadata_file_ids,
-                    fact_context_text=answer,
-                    answer_override=answer,
-                    facts_used_count=facts_used_count,
-                    confidence_notes=["Figura Legal counts were resolved directly from canonical CSV metadata rows."],
-                    metadata_phase_used=True,
-                    resolved_archive_slugs=[row.archive_slug for row in metadata_rows if str(row.archive_slug).strip()],
-                    metadata_only_reason="metadata_analytics",
-                )
 
         generic_metadata_answer = self._resolve_generic_metadata_analytics(
             question=question,
@@ -720,98 +553,6 @@ class QuestionFactResolver:
                 metadata_phase_used=True,
                 resolved_archive_slugs=[row.archive_slug for row in metadata_rows if str(row.archive_slug).strip()],
                 metadata_only_reason="metadata_analytics",
-            )
-
-        if any(token in normalized for token in ("empresa nacional de telecomunicaciones", "entel")):
-            current_only = "vigent" in normalized
-            count = self.repository.count_groups_by_subject_name(
-                user_id=int(user_id),
-                subject_name="Empresa Nacional de Telecomunicaciones",
-                file_ids=file_ids or None,
-                current_only=current_only,
-                include_shared=True,
-            )
-            answer = (
-                f"Se identificaron {count} contratos {'vigentes ' if current_only else ''}"
-                "asociados a Empresa Nacional de Telecomunicaciones SA."
-            )
-            return self._append_archive_metadata_context(
-                resolution=FactResolution(
-                narrowed_file_ids=[],
-                fact_context_text=answer,
-                answer_override=answer,
-                facts_used_count=count,
-                confidence_notes=["Analytics answered from structured document facts."],
-                ),
-                user_id=user_id,
-                file_ids=file_ids,
-            )
-        if "transam" in normalized:
-            count = self.repository.count_groups_by_subject_name(
-                user_id=int(user_id),
-                subject_name="TRANSAM",
-                file_ids=file_ids or None,
-                current_only=False,
-                include_shared=True,
-            )
-            answer = f"Se identificaron {count} contratos asociados a TRANSAM."
-            return self._append_archive_metadata_context(
-                resolution=FactResolution(
-                narrowed_file_ids=[],
-                fact_context_text=answer,
-                answer_override=answer,
-                facts_used_count=count,
-                confidence_notes=["Analytics answered from structured document facts."],
-                ),
-                user_id=user_id,
-                file_ids=file_ids,
-            )
-        if "vencid" in normalized:
-            count = self.repository.count_expired_groups(
-                user_id=int(user_id),
-                as_of_date=reference_date,
-                file_ids=file_ids or None,
-                include_shared=True,
-            )
-            answer = f"Se identificaron {count} contratos vencidos al {reference_date.isoformat()}."
-            return self._append_archive_metadata_context(
-                resolution=FactResolution(
-                narrowed_file_ids=[],
-                fact_context_text=answer,
-                answer_override=answer,
-                facts_used_count=count,
-                confidence_notes=["Expiration count resolved from current structured profiles."],
-                ),
-                user_id=user_id,
-                file_ids=file_ids,
-            )
-        if "sitios" in normalized and "id de contrato" in normalized:
-            rows = self.repository.list_secondary_identifiers_with_multiple_primary_identifiers(
-                user_id=int(user_id),
-                file_ids=file_ids or None,
-                include_shared=True,
-            )
-            answer = "No se identificaron sitios con mas de un ID de contrato."
-            if rows:
-                fragments = [
-                    (
-                        f"{row.get('secondary_identifier')}: "
-                        f"{row.get('primary_identifier_count')} IDs "
-                        f"({row.get('primary_identifiers')})"
-                    )
-                    for row in rows[:10]
-                ]
-                answer = "Sitios con multiples IDs de contrato: " + "; ".join(fragments) + "."
-            return self._append_archive_metadata_context(
-                resolution=FactResolution(
-                narrowed_file_ids=[],
-                fact_context_text=answer,
-                answer_override=answer,
-                facts_used_count=len(rows),
-                confidence_notes=["Identifier multiplicity resolved from structured profiles."],
-                ),
-                user_id=user_id,
-                file_ids=file_ids,
             )
         return self._append_archive_metadata_context(
             resolution=FactResolution(narrowed_file_ids=[], fact_context_text="", facts_used_count=0),
@@ -861,22 +602,6 @@ class QuestionFactResolver:
             and not self._question_requests_quantified_aggregate(question)
             and not pattern_summary_requested
         )
-
-        if (
-            not prefer_field_resolution
-            and not document_centric_question
-            and (
-                self._question_targets_sites_with_multiple_contract_ids(question)
-                or self._question_targets_contract_state_counts(question)
-                or self._question_targets_entel_figure_count(question)
-            )
-        ):
-            return self._resolve_analytics(
-                question=question,
-                user_id=user_id,
-                file_ids=file_ids,
-                reference_date=reference_date or datetime.utcnow().date(),
-            )
 
         if (
             self._question_requests_aggregate(question)
@@ -949,36 +674,11 @@ class QuestionFactResolver:
                     resolved_archive_slugs=resolved_archive_slugs,
                     resolved_metadata_fields=requested_fields,
                     document_phase_required=True,
-                    answerability_route="metadata_plus_documents",
+                    answerability_route="hybrid",
                 ),
                 user_id=user_id,
                 file_ids=document_scope_file_ids or resolved_file_ids or file_ids,
             )
-
-        if (
-            self._question_targets_docling_quality_review(question)
-            or self._question_targets_metadata_document_quality_review(question)
-            or self._question_targets_metadata_document_differences(question)
-        ):
-            quality_answer = self._build_docling_quality_review_answer(
-                user_id=user_id,
-                file_ids=document_scope_file_ids or resolved_file_ids or file_ids,
-                metadata_rows=metadata_rows,
-                requested_fields=safe_requested_fields,
-            )
-            if quality_answer is not None:
-                answer_override, facts_used_count, narrowed_file_ids = quality_answer
-                return FactResolution(
-                    narrowed_file_ids=narrowed_file_ids or document_scope_file_ids or resolved_file_ids,
-                    fact_context_text=answer_override,
-                    answer_override=answer_override,
-                    facts_used_count=facts_used_count,
-                    confidence_notes=["Docling OCR quality gates were evaluated before trusting metadata fields."],
-                    metadata_phase_used=True,
-                    resolved_archive_slugs=resolved_archive_slugs,
-                    resolved_metadata_fields=safe_requested_fields,
-                    metadata_only_reason="docling_quality_review",
-                )
 
         if safe_requested_fields and pattern_summary_requested and not document_centric_question:
             pattern_answer = self._build_metadata_pattern_summary_answer(
@@ -999,56 +699,7 @@ class QuestionFactResolver:
                     metadata_only_reason="metadata_pattern_summary",
                 )
 
-        if self._question_targets_metadata_document_differences(question):
-            difference_answer = self._build_metadata_document_difference_answer(
-                user_id=user_id,
-                question=question,
-                file_ids=document_scope_file_ids or resolved_file_ids or file_ids,
-                metadata_rows=metadata_rows,
-            )
-            if difference_answer is not None:
-                answer_override, facts_used_count = difference_answer
-                return FactResolution(
-                    narrowed_file_ids=document_scope_file_ids or resolved_file_ids,
-                    fact_context_text=answer_override,
-                    answer_override=answer_override,
-                    facts_used_count=facts_used_count,
-                    confidence_notes=[
-                        "Metadata and structured document facts were compared directly before vector retrieval."
-                    ],
-                    metadata_phase_used=True,
-                    resolved_archive_slugs=resolved_archive_slugs,
-                    resolved_metadata_fields=requested_fields,
-                    metadata_only_reason="metadata_document_difference",
-                )
-
         if requested_fields:
-            derived_answer = self._build_metadata_derived_answer(
-                question=question,
-                metadata_rows=metadata_rows,
-                requested_fields=requested_fields,
-                compare_requested=compare_requested,
-                reference_date=reference_date or datetime.utcnow().date(),
-            )
-            if derived_answer is not None:
-                answer_override, facts_used_count = derived_answer
-                if append_inventory_to_answer:
-                    answer_override = self._append_document_inventory_to_answer(
-                        answer=answer_override,
-                        user_id=user_id,
-                        file_ids=document_scope_file_ids or resolved_file_ids,
-                    )
-                return FactResolution(
-                    narrowed_file_ids=resolved_file_ids,
-                    fact_context_text=answer_override,
-                    answer_override=answer_override,
-                    facts_used_count=facts_used_count,
-                    confidence_notes=["Metadata-derived answer resolved from canonical CSV rows."],
-                    metadata_phase_used=True,
-                    resolved_archive_slugs=resolved_archive_slugs,
-                    resolved_metadata_fields=requested_fields,
-                    metadata_only_reason="metadata_fields_derived",
-                )
             answer_override = self._build_metadata_answer(
                 question=question,
                 metadata_rows=metadata_rows,
@@ -1119,7 +770,7 @@ class QuestionFactResolver:
                             resolved_archive_slugs=resolved_archive_slugs,
                             resolved_metadata_fields=requested_fields,
                             document_phase_required=True,
-                            answerability_route="metadata_plus_documents",
+                            answerability_route="hybrid",
                         ),
                         user_id=user_id,
                         file_ids=document_scope_file_ids or resolved_file_ids or file_ids,
@@ -1134,7 +785,7 @@ class QuestionFactResolver:
                     resolved_archive_slugs=resolved_archive_slugs,
                     resolved_metadata_fields=requested_fields,
                     metadata_only_reason="metadata_fields_sufficient",
-                    answerability_route="structured_only",
+                    answerability_route="metadata",
                 )
 
         if compare_requested and len(metadata_rows) >= 2:
@@ -1152,7 +803,7 @@ class QuestionFactResolver:
                         resolved_archive_slugs=resolved_archive_slugs,
                         resolved_metadata_fields=requested_fields,
                         document_phase_required=True,
-                        answerability_route="metadata_plus_documents",
+                        answerability_route="hybrid",
                     )
                 return FactResolution(
                     narrowed_file_ids=resolved_file_ids,
@@ -1168,7 +819,7 @@ class QuestionFactResolver:
                     resolved_archive_slugs=resolved_archive_slugs,
                     resolved_metadata_fields=requested_fields,
                     metadata_only_reason="metadata_comparison_sufficient",
-                    answerability_route="structured_only",
+                    answerability_route="metadata",
                 )
 
         return self._append_archive_metadata_context(
@@ -1185,7 +836,7 @@ class QuestionFactResolver:
                 resolved_archive_slugs=resolved_archive_slugs,
                 resolved_metadata_fields=requested_fields,
                 document_phase_required=True,
-                answerability_route="metadata_plus_documents",
+                answerability_route="hybrid",
             ),
             user_id=user_id,
             file_ids=document_scope_file_ids or resolved_file_ids or file_ids,
@@ -1225,15 +876,15 @@ class QuestionFactResolver:
             )
         delta_days = (effective_to - reference_date).days
         answer = (
-            f"Al {reference_date.isoformat()}, al contrato vigente le quedan {delta_days} dias de vigencia."
+            f"Al {reference_date.isoformat()}, al perfil vigente le quedan {delta_days} dias hasta su fecha efectiva final."
             if delta_days >= 0
-            else f"Al {reference_date.isoformat()}, el contrato vigente aparece vencido hace {abs(delta_days)} dias."
+            else f"Al {reference_date.isoformat()}, el perfil vigente aparece vencido hace {abs(delta_days)} dias."
         )
         return self._append_archive_metadata_context(
             resolution=FactResolution(
             narrowed_file_ids=[int(current.get("file_id") or 0)],
             fact_context_text=answer,
-            answer_override=answer if "vigencia" in question.lower() else None,
+            answer_override=answer,
             facts_used_count=1,
             file_group_ids=[int(current.get("file_group_id") or 0)] if int(current.get("file_group_id") or 0) > 0 else [],
             confidence_notes=["Temporal answer resolved from structured current profiles."],
@@ -1398,53 +1049,6 @@ class QuestionFactResolver:
             rows = [row for row in rows if int(row.get("file_id") or 0) in safe_file_ids]
         return rows
 
-    def _list_page_quality_rows(self, *, user_id: int, file_ids: list[int]) -> list[dict[str, object]]:
-        if self.file_repository is None:
-            return []
-        safe_file_ids = [int(file_id) for file_id in list(file_ids or []) if int(file_id) > 0]
-        if not safe_file_ids:
-            return []
-        list_page_quality = getattr(self.file_repository, "list_page_quality_for_file_ids", None)
-        if not callable(list_page_quality):
-            return []
-        try:
-            return [
-                dict(row)
-                for row in list(
-                    list_page_quality(
-                        user_id=int(user_id),
-                        file_ids=safe_file_ids,
-                        include_shared=True,
-                    )
-                )
-            ]
-        except Exception:
-            return []
-
-    @classmethod
-    def _question_targets_docling_quality_review(cls, question: str) -> bool:
-        normalized = cls._normalize_text(question)
-        return any(
-            token in normalized
-            for token in (
-                "revision humana",
-                "requiere revision",
-                "priorizarse para revision",
-                "ocr",
-                "cifrado",
-                "cifrados",
-                "no validable",
-                "inconsistencia",
-                "inconsistencias",
-                "ambiguedad",
-                "ambigüedad",
-                "contradiccion",
-                "contradicción",
-                "ausencia",
-                "calidad",
-            )
-        )
-
     @classmethod
     def _question_requests_document_content(cls, question: str) -> bool:
         normalized = cls._normalize_text(question)
@@ -1454,16 +1058,12 @@ class QuestionFactResolver:
                 "segun el ocr",
                 "segun ocr",
                 "ocr del documento",
-                "ocr del contrato",
                 "texto ocr",
                 "texto extraido",
                 "texto del documento",
-                "texto contractual",
                 "contenido del documento",
-                "contenido contractual",
                 "segun el documento",
                 "segun los documentos",
-                "segun el contrato",
                 "segun el pdf",
                 "segun los pdfs",
                 "documento",
@@ -1486,37 +1086,13 @@ class QuestionFactResolver:
                 "partes",
                 "partes principales",
                 "partes involucradas",
-                "arrendador",
-                "arrendatario",
                 "firmantes",
                 "representantes",
                 "direccion",
-                "sitio",
-                "renta",
                 "precio",
-                "canon",
-                "vigencia",
-                "objeto del contrato",
+                "objeto",
             )
         )
-
-    @classmethod
-    def _question_targets_metadata_document_quality_review(cls, question: str) -> bool:
-        normalized = cls._normalize_text(question)
-        metadata_requested = any(token in normalized for token in ("metadata", "metadatos"))
-        document_requested = "document" in normalized
-        validation_requested = any(
-            token in normalized
-            for token in (
-                "coincid",
-                "consisten",
-                "validable",
-                "validar",
-                "valida",
-                "coheren",
-            )
-        )
-        return bool(metadata_requested and document_requested and validation_requested)
 
     @classmethod
     def _question_requests_pattern_summary(cls, question: str) -> bool:
@@ -1596,202 +1172,11 @@ class QuestionFactResolver:
         return answer, len(metadata_rows), narrowed_file_ids
 
     @classmethod
-    def _normalize_sequence_field(cls, value: object) -> list[str]:
-        if isinstance(value, (list, tuple, set)):
-            return [str(item).strip() for item in value if str(item).strip()]
-        text = str(value or "").strip()
-        if not text:
-            return []
-        try:
-            parsed = json.loads(text)
-            if isinstance(parsed, list):
-                return [str(item).strip() for item in parsed if str(item).strip()]
-        except Exception:
-            pass
-        return [item.strip() for item in re.split(r"[,;|]\s*", text) if item.strip()]
-
-    @classmethod
-    def _quality_row_is_encrypted_or_unreadable(cls, row: dict[str, object]) -> bool:
-        flags = " ".join(cls._normalize_sequence_field(row.get("visual_flags"))).lower()
-        methods = " ".join(cls._normalize_sequence_field(row.get("ocr_methods"))).lower()
-        status = str(row.get("status") or "").strip().lower()
-        encrypted_pages = int(row.get("encrypted_or_unreadable_pages_count") or 0)
-        indexed_pages = int(row.get("indexed_pages_count") or 0)
-        file_page_count = int(row.get("file_page_count") or row.get("page_count") or 0)
-        encrypted_terms = ("encrypted", "cifrado", "password", "locked", "unreadable", "no_extraible")
-        if encrypted_pages > 0 or any(term in flags or term in methods for term in encrypted_terms):
-            return True
-        return bool(status == "failed" and file_page_count > 0 and indexed_pages == 0)
-
-    @classmethod
-    def _quality_row_has_low_ocr(cls, row: dict[str, object]) -> bool:
-        flags = " ".join(cls._normalize_sequence_field(row.get("visual_flags"))).lower()
-        low_pages = int(row.get("low_ocr_pages_count") or 0)
-        blank_pages = int(row.get("blank_pages_count") or 0)
-        avg_confidence = float(row.get("avg_ocr_confidence") or 0.0)
-        avg_text_quality = float(row.get("avg_text_quality") or 0.0)
-        return bool(
-            low_pages > 0
-            or blank_pages > 0
-            or "low_ocr_confidence" in flags
-            or (0.0 < avg_confidence < 0.78)
-            or (0.0 < avg_text_quality < 0.55)
-        )
-
-    @classmethod
-    def _build_metadata_quality_fragments(
-        cls,
-        *,
-        metadata_rows: list[ArchiveMetadataEntry],
-        requested_fields: list[str],
-    ) -> list[str]:
-        if not metadata_rows or not requested_fields:
-            return []
-        fragments: list[str] = []
-        for row in metadata_rows:
-            row_parts: list[str] = []
-            for field_name in requested_fields:
-                header, raw_value = cls._find_metadata_field(row, field_name)
-                if not header:
-                    row_parts.append(f"{field_name}=sin metadata")
-                    continue
-                rendered = cls._format_metadata_value(raw_value)
-                row_parts.append(f"{header}={rendered}")
-            if row_parts:
-                fragments.append(f"{row.archive_slug}: " + "; ".join(row_parts))
-        return fragments
-
-    def _build_docling_quality_review_answer(
-        self,
-        *,
-        user_id: int,
-        file_ids: list[int],
-        metadata_rows: list[ArchiveMetadataEntry],
-        requested_fields: list[str],
-    ) -> tuple[str, int, list[int]] | None:
-        safe_file_ids = [int(file_id) for file_id in list(file_ids or []) if int(file_id) > 0]
-        if not safe_file_ids:
-            safe_file_ids = [int(row.file_id) for row in metadata_rows if int(row.file_id) > 0]
-        quality_rows = self._list_page_quality_rows(user_id=user_id, file_ids=safe_file_ids)
-        if not quality_rows:
-            return None
-
-        encrypted_rows: list[dict[str, object]] = []
-        issue_lines: list[str] = []
-        narrowed_file_ids: list[int] = []
-        encrypted_by_archive: Counter[str] = Counter()
-        total_by_archive: Counter[str] = Counter()
-        for row in quality_rows:
-            file_id = int(row.get("file_id") or 0)
-            if file_id > 0 and file_id not in narrowed_file_ids:
-                narrowed_file_ids.append(file_id)
-            file_name = repair_document_file_name(
-                row.get("file_name") or row.get("file_input_file_name") or f"file-{file_id}"
-            )
-            archive_slug = str(row.get("archive_slug") or "").strip()
-            if archive_slug:
-                total_by_archive[archive_slug] += 1
-            page_count = int(row.get("file_page_count") or row.get("page_count") or 0)
-            indexed_pages = int(row.get("indexed_pages_count") or 0)
-            encrypted = self._quality_row_is_encrypted_or_unreadable(row)
-            low_ocr = self._quality_row_has_low_ocr(row)
-            if encrypted:
-                encrypted_rows.append(row)
-                if archive_slug:
-                    encrypted_by_archive[archive_slug] += 1
-            if not encrypted and not low_ocr:
-                continue
-            issue_parts: list[str] = []
-            if encrypted:
-                page_hint = max(1, page_count or indexed_pages or 0)
-                issue_parts.append(f"PDF cifrado/no extraible ({page_hint} paginas registradas)")
-            if low_ocr:
-                avg_confidence = float(row.get("avg_ocr_confidence") or 0.0)
-                if avg_confidence > 0:
-                    issue_parts.append(f"OCR Docling bajo ({avg_confidence:.2f})")
-                else:
-                    issue_parts.append("OCR Docling bajo o texto insuficiente")
-            if issue_parts:
-                prefix = f"{archive_slug}: " if archive_slug else ""
-                issue_lines.append(f"{prefix}{file_name} -> " + "; ".join(issue_parts))
-
-        if not issue_lines:
-            return None
-
-        metadata_fragments = self._build_metadata_quality_fragments(
-            metadata_rows=metadata_rows,
-            requested_fields=requested_fields,
-        )
-        encrypted_count = len(encrypted_rows)
-        archive_fragments = [
-            (
-                f"{archive_slug}: {count} de {max(1, int(total_by_archive.get(archive_slug) or count))} PDF cifrado"
-                if int(total_by_archive.get(archive_slug) or 0) == count
-                else f"{archive_slug}: {count} PDF cifrados"
-            )
-            for archive_slug, count in sorted(encrypted_by_archive.items())
-            if count > 0
-        ]
-        headline = (
-            f"requiere revision humana: {encrypted_count} PDF cifrados o no extraibles; "
-            "consistencia no validable aun con la metadata hasta revisar OCR/layout Docling."
-            if encrypted_count
-            else "requiere revision humana: se detectaron senales de OCR/layout Docling insuficientes."
-        )
-        answer_parts = [headline]
-        if archive_fragments:
-            answer_parts.append("Resumen por expediente: " + "; ".join(archive_fragments))
-        answer_parts.append("Prioridad documental: " + " | ".join(issue_lines))
-        if metadata_fragments:
-            answer_parts.append(
-                "Metadata asociada: "
-                + " | ".join(metadata_fragments[:8])
-                + ". Si la metadata indica REVISADO OK, queda contradicha por las senales de calidad documental."
-            )
-        answer = " ".join(part.strip() for part in answer_parts if part.strip())
-        return answer, max(1, len(issue_lines) + len(metadata_fragments)), narrowed_file_ids or safe_file_ids
-
-    @classmethod
-    def _question_targets_sites_with_multiple_contract_ids(cls, question: str) -> bool:
-        normalized = cls._normalize_text(question)
-        return "sitio" in normalized and "id de contrato" in normalized
-
-    @classmethod
-    def _question_targets_contract_state_counts(cls, question: str) -> bool:
-        normalized = cls._normalize_text(question)
-        if "entel" in normalized or "figura legal" in normalized or "sociedad" in normalized:
-            return False
-        return (
-            any(token in normalized for token in ("cuantos", "cuantas", "cuenta", "cantidad"))
-            and "contrato" in normalized
-            and any(token in normalized for token in ("vigent", "vencid", "terminad"))
-        )
-
-    @classmethod
-    def _question_targets_top_document_versions(cls, question: str) -> bool:
-        normalized = cls._normalize_text(question)
-        if "versiones documentales" in normalized or "pdfs asociados" in normalized:
-            return True
-        return (
-            "version" in normalized
-            and "contrato" in normalized
-            and any(token in normalized for token in ("mas", "mayor a menor", "ordena", "ordenalos"))
-        )
-
-    @classmethod
-    def _question_targets_entel_figure_count(cls, question: str) -> bool:
-        normalized = cls._normalize_text(question)
-        return "entel" in normalized and any(
-            token in normalized
-            for token in ("figura legal", "sociedad", "firmados por", "contratos vigentes")
-        )
-
-    @classmethod
     def _question_requests_aggregate(cls, question: str) -> bool:
         normalized = cls._normalize_text(question)
         plural_scope_requested = any(
             token in normalized
-            for token in ("contratos", "sitios", "archivos", "documentos", "folios")
+            for token in ("archivos", "documentos", "folios", "casos", "registros")
         )
         listing_signal = any(
             token in normalized
@@ -1806,22 +1191,22 @@ class QuestionFactResolver:
                 "cuantas",
                 "cantidad",
                 "cuenta de",
-                "que sitios",
-                "cuales sitios",
-                "que contratos",
-                "cuales contratos",
+                "que campos",
+                "cuales campos",
+                "que valores",
+                "cuales valores",
                 "que comunas",
                 "cuales comunas",
                 "que regiones",
                 "cuales regiones",
-                "lista sitios",
-                "lista contratos",
+                "lista campos",
+                "lista valores",
                 "lista comunas",
                 "lista regiones",
-                "listame los sitios",
-                "listame los contratos",
-                "muestrame los sitios",
-                "muestrame los contratos",
+                "listame los campos",
+                "listame los valores",
+                "muestrame los campos",
+                "muestrame los valores",
             )
         ):
             return True
@@ -1857,7 +1242,7 @@ class QuestionFactResolver:
             return True
         plural_scope_requested = any(
             token in normalized
-            for token in ("contratos", "sitios", "archivos", "documentos", "folios")
+            for token in ("archivos", "documentos", "folios", "casos", "registros")
         )
         listing_signal = any(
             token in normalized
@@ -1868,22 +1253,22 @@ class QuestionFactResolver:
         if any(
             token in normalized
             for token in (
-                "que sitios",
-                "cuales sitios",
-                "que contratos",
-                "cuales contratos",
+                "que campos",
+                "cuales campos",
+                "que valores",
+                "cuales valores",
                 "que comunas",
                 "cuales comunas",
                 "que regiones",
                 "cuales regiones",
-                "lista sitios",
-                "lista contratos",
+                "lista campos",
+                "lista valores",
                 "lista comunas",
                 "lista regiones",
-                "listame los sitios",
-                "listame los contratos",
-                "muestrame los sitios",
-                "muestrame los contratos",
+                "listame los campos",
+                "listame los valores",
+                "muestrame los campos",
+                "muestrame los valores",
             )
         ):
             return True
@@ -1930,11 +1315,9 @@ class QuestionFactResolver:
                 for token in (
                     "modific",
                     "documento base",
-                    "contrato base",
                     "de donde fue extraido",
                     "dato clave",
                     "datos clave",
-                    "instrumento vigente",
                     "gobierna",
                     "rige",
                     "quien firma",
@@ -2133,13 +1516,6 @@ class QuestionFactResolver:
         normalized_value = cls._normalize_text(candidate_value)
         if not normalized_value or normalized_value in {"-", "(blank)"}:
             return 0
-        if field_base == "estado contrato":
-            if "vigent" in normalized_question and "vigent" in normalized_value:
-                return 320 + len(normalized_value)
-            if "vencid" in normalized_question and "vencid" in normalized_value:
-                return 320 + len(normalized_value)
-            if "terminad" in normalized_question and "terminad" in normalized_value:
-                return 320 + len(normalized_value)
         if normalized_value in {"si", "no"} and not header_referenced:
             return 0
         if len(normalized_value) >= 5 and re.search(rf"\b{re.escape(normalized_value)}\b", normalized_question):
@@ -2171,7 +1547,7 @@ class QuestionFactResolver:
         question_tokens = cls._expanded_token_set(question)
         matches: list[MetadataFilterMatch] = []
         seen_bases: set[str] = set()
-        always_allowed_bases = {"estado contrato", "figura legal", "codigo de sitio", "id"}
+        always_allowed_bases = {"id", "codigo", "identificador"}
         for field in cls._build_metadata_schema(metadata_rows=metadata_rows):
             if not field.base or field.base == "file" or field.base in seen_bases:
                 continue
@@ -2248,24 +1624,6 @@ class QuestionFactResolver:
         metadata_rows: list[ArchiveMetadataEntry],
     ) -> tuple[str | None, str, bool]:
         normalized = cls._normalize_text(question)
-        if any(
-            token in normalized
-            for token in (
-                "id de sitio",
-                "ids de sitio",
-                "codigo de sitio",
-                "que sitios",
-                "cuales sitios",
-                "sitios hay",
-            )
-        ) or ("sitio" in normalized and "contrato" not in normalized):
-            header = cls._find_preferred_metadata_header(metadata_rows, "codigo de sitio")
-            if header:
-                return header, "sitios", True
-        if any(token in normalized for token in ("id de contrato", "ids de contrato")):
-            header = cls._find_preferred_metadata_header(metadata_rows, "id")
-            if header:
-                return header, "ids de contrato", True
         if any(token in normalized for token in ("que comunas", "cuales comunas", "cuantas comunas")):
             header = cls._find_preferred_metadata_header(metadata_rows, "comuna")
             if header:
@@ -2274,28 +1632,20 @@ class QuestionFactResolver:
             header = cls._find_preferred_metadata_header(metadata_rows, "region")
             if header:
                 return header, "regiones", True
-        if "beneficiario" in normalized and "rut" not in normalized:
-            header = cls._find_preferred_metadata_header(metadata_rows, "nombre beneficiario")
+        if any(token in normalized for token in ("id", "ids", "identificador", "identificadores", "codigo", "codigos")):
+            header = cls._find_preferred_metadata_header(metadata_rows, "id", "codigo", "identificador")
             if header:
-                return header, "beneficiarios", True
-        if "propietario" in normalized and "rut" not in normalized:
-            header = cls._find_preferred_metadata_header(metadata_rows, "nombre de propietario principal")
-            if header:
-                return header, "propietarios", True
-        if any(token in normalized for token in ("sociedad", "sociedades", "figura legal")):
-            header = cls._find_preferred_metadata_header(metadata_rows, "figura legal")
-            if header:
-                return header, "sociedades", True
+                return header, "identificadores", True
         schema_candidates = cls._rank_schema_fields_for_text(
             text=question,
             metadata_rows=metadata_rows,
             min_score=140,
         )
         if not schema_candidates:
-            return None, "contratos", False
-        contract_like_request = any(
+            return None, "registros", False
+        record_like_request = any(
             token in normalized
-            for token in ("contrat", "archivo", "archivos", "file", "files", "folio", "folios", "documento")
+            for token in ("archivo", "archivos", "file", "files", "folio", "folios", "documento", "registro")
         )
         explicit_candidates = [
             field
@@ -2308,10 +1658,10 @@ class QuestionFactResolver:
         if explicit_candidates:
             field = explicit_candidates[0]
             return field.header, field.header, True
-        if not contract_like_request:
+        if not record_like_request:
             field = schema_candidates[0][2]
             return field.header, field.header, True
-        return None, "contratos", False
+        return None, "registros", False
 
     @classmethod
     def _resolve_generic_metadata_analytics(
@@ -2390,7 +1740,7 @@ class QuestionFactResolver:
             for row in filtered_rows
             if str(row.archive_slug or "").strip()
         ]
-        answer = f"Segun la metadata cargada, hay {len(filtered_rows)} contratos"
+        answer = f"Segun la metadata cargada, hay {len(filtered_rows)} registros"
         if filter_description:
             answer += f" con {filter_description}"
         if archive_values and (list_requested or len(filtered_rows) <= 12):
@@ -2469,187 +1819,6 @@ class QuestionFactResolver:
         return cls._format_metadata_value(value)
 
     @classmethod
-    def _normalize_contract_state(cls, value: object | None) -> str:
-        normalized = cls._normalize_text(value)
-        if "vigent" in normalized:
-            return "vigente"
-        if "vencid" in normalized:
-            return "vencido"
-        if "terminad" in normalized:
-            return "terminado"
-        return ""
-
-    @classmethod
-    def _build_multi_contract_site_answer(
-        cls,
-        *,
-        metadata_rows: list[ArchiveMetadataEntry],
-    ) -> tuple[str, int]:
-        site_to_contract_ids: dict[str, set[str]] = defaultdict(set)
-        for row in metadata_rows:
-            site_code = cls._metadata_text_value(row, "codigo de sitio")
-            contract_id = cls._metadata_text_value(row, "id")
-            if not site_code or not contract_id:
-                continue
-            site_to_contract_ids[site_code].add(contract_id)
-        repeated_sites = [
-            (site_code, sorted(contract_ids, key=lambda item: cls._normalize_text(item)))
-            for site_code, contract_ids in site_to_contract_ids.items()
-            if len(contract_ids) > 1
-        ]
-        repeated_sites.sort(key=lambda item: (-len(item[1]), cls._normalize_text(item[0])))
-        if not repeated_sites:
-            return "No se identificaron sitios con más de un ID de contrato en la metadata cargada.", 0
-        fragments = [
-            f"{site_code}: {', '.join(contract_ids)}"
-            for site_code, contract_ids in repeated_sites[:12]
-        ]
-        facts_used_count = sum(len(contract_ids) for _, contract_ids in repeated_sites)
-        return (
-            f"Se identificaron {len(repeated_sites)} sitios con más de un ID de contrato: "
-            + "; ".join(fragments)
-            + ".",
-            facts_used_count,
-        )
-
-    @classmethod
-    def _build_contract_state_counts_answer(
-        cls,
-        *,
-        metadata_rows: list[ArchiveMetadataEntry],
-    ) -> tuple[str, int]:
-        state_counter: Counter[str] = Counter()
-        blank_count = 0
-        for row in metadata_rows:
-            state = cls._normalize_contract_state(cls._metadata_text_value(row, "estado contrato"))
-            if state:
-                state_counter[state] += 1
-            else:
-                blank_count += 1
-        answer = (
-            "Según la metadata cargada: "
-            f"vigentes={int(state_counter.get('vigente', 0))}, "
-            f"vencidos={int(state_counter.get('vencido', 0))}, "
-            f"terminados={int(state_counter.get('terminado', 0))}"
-        )
-        if blank_count > 0:
-            answer += f", sin estado={blank_count}"
-        return answer + ".", len(metadata_rows)
-
-    def _build_top_document_versions_answer(
-        self,
-        *,
-        user_id: int,
-        file_ids: list[int],
-    ) -> tuple[str | None, int]:
-        rows = self._list_user_files(user_id=user_id, file_ids=file_ids)
-        if not rows:
-            return None, 0
-        archive_counter: Counter[str] = Counter()
-        file_names_by_archive: dict[str, list[str]] = defaultdict(list)
-        for row in rows:
-            archive_slug = str(row.get("archive_slug") or "").strip()
-            if archive_slug:
-                archive_counter[archive_slug] += 1
-                file_name = str(row.get("file_input_file_name") or "").strip()
-                if file_name:
-                    file_names_by_archive[archive_slug].append(file_name)
-        if not archive_counter:
-            return None, 0
-        ranked = sorted(
-            archive_counter.items(),
-            key=lambda item: (-int(item[1]), self._normalize_text(item[0])),
-        )
-        if len(ranked) == 1:
-            archive_slug, count = ranked[0]
-            file_names = sorted(
-                {
-                    file_name
-                    for file_name in file_names_by_archive.get(archive_slug, [])
-                    if str(file_name).strip()
-                },
-                key=self._normalize_text,
-            )
-            if file_names:
-                answer = (
-                    f"{archive_slug} tiene {count} documentos/versiones: "
-                    + "; ".join(file_names[:20])
-                    + "."
-                )
-                return answer, int(count)
-        fragments = [f"{archive_slug} ({count} PDFs)" for archive_slug, count in ranked[:8]]
-        answer = "Contratos con más versiones documentales: " + "; ".join(fragments) + "."
-        return answer, sum(int(count) for _, count in ranked)
-
-    @classmethod
-    def _build_entel_figure_count_answer(
-        cls,
-        *,
-        question: str,
-        metadata_rows: list[ArchiveMetadataEntry],
-    ) -> tuple[str | None, int]:
-        normalized_question = cls._normalize_text(question)
-        current_only = "vigent" in normalized_question
-        explicit_targets = (
-            ("entel pcs", "ENTEL PCS"),
-            ("entel s.a", "ENTEL S.A."),
-            ("entel sa", "ENTEL S.A."),
-            ("transam", "TRANSAM"),
-        )
-        requested_label = ""
-        for raw_token, display_label in explicit_targets:
-            if raw_token in normalized_question:
-                requested_label = display_label
-                break
-
-        counts: Counter[str] = Counter()
-        for row in metadata_rows:
-            state = cls._normalize_contract_state(cls._metadata_text_value(row, "estado contrato"))
-            if current_only and state != "vigente":
-                continue
-            figure_label = cls._metadata_text_value(row, "figura legal")
-            if not figure_label:
-                continue
-            normalized_figure = cls._normalize_text(figure_label)
-            if requested_label:
-                if cls._normalize_text(requested_label) != normalized_figure:
-                    continue
-                counts[requested_label] += 1
-                continue
-            if "entel" in normalized_figure:
-                counts[figure_label] += 1
-
-        if not counts:
-            return None, 0
-
-        if requested_label:
-            count = int(counts.get(requested_label, 0))
-            scope_text = "vigentes " if current_only else ""
-            return (
-                f"Se identificaron {count} contratos {scope_text}firmados por {requested_label} según la metadata cargada.",
-                count,
-            )
-
-        ranked = sorted(counts.items(), key=lambda item: (-int(item[1]), cls._normalize_text(item[0])))
-        scope_text = "vigentes " if current_only else ""
-        fragments = [f"{label}: {count}" for label, count in ranked]
-        return (
-            f"Distribución de contratos {scope_text}por sociedad Entel según la metadata: "
-            + "; ".join(fragments)
-            + ".",
-            sum(int(count) for _, count in ranked),
-        )
-
-    @classmethod
-    def _question_targets_metadata_document_differences(cls, question: str) -> bool:
-        normalized = cls._normalize_text(question)
-        return (
-            any(token in normalized for token in ("metadata", "metadatos"))
-            and "document" in normalized
-            and any(token in normalized for token in ("diferencia", "contradic", "vacio", "vacios", "coheren"))
-        )
-
-    @classmethod
     def _is_unspecified_metadata_value(cls, value: object | None) -> bool:
         normalized = cls._normalize_text(value)
         return (
@@ -2660,189 +1829,6 @@ class QuestionFactResolver:
             or "sin informacion" in normalized
             or "sin metadata" in normalized
         )
-
-    @classmethod
-    def _names_loosely_match(cls, left: object | None, right: object | None) -> bool:
-        left_normalized = cls._normalize_text(left)
-        right_normalized = cls._normalize_text(right)
-        if not left_normalized or not right_normalized:
-            return True
-        if left_normalized in right_normalized or right_normalized in left_normalized:
-            return True
-        left_tokens = {
-            token
-            for token in cls._tokenize(left_normalized)
-            if token not in _METADATA_STOPWORDS and len(token) > 2
-        }
-        right_tokens = {
-            token
-            for token in cls._tokenize(right_normalized)
-            if token not in _METADATA_STOPWORDS and len(token) > 2
-        }
-        if not left_tokens or not right_tokens:
-            return True
-        overlap = left_tokens & right_tokens
-        return len(overlap) >= max(2, min(len(left_tokens), len(right_tokens)) - 1)
-
-    @classmethod
-    def _derive_profile_state(cls, profile: dict[str, object], *, reference_date: date) -> str:
-        effective_to = profile.get("effective_to")
-        if hasattr(effective_to, "date"):
-            effective_to = effective_to.date()
-        if isinstance(effective_to, datetime):
-            effective_to = effective_to.date()
-        if not isinstance(effective_to, date):
-            return ""
-        return "vencido" if effective_to < reference_date else "vigente"
-
-    def _build_metadata_document_difference_answer(
-        self,
-        *,
-        user_id: int,
-        question: str,
-        file_ids: list[int],
-        metadata_rows: list[ArchiveMetadataEntry],
-    ) -> tuple[str, int] | None:
-        del question
-        if not metadata_rows:
-            return None
-
-        safe_file_ids = [int(file_id) for file_id in list(file_ids or []) if int(file_id) > 0]
-        archive_slug_map = {
-            int(row.file_id): str(row.archive_slug)
-            for row in metadata_rows
-            if int(row.file_id) > 0 and str(row.archive_slug or "").strip()
-        }
-        get_archive_slug_map = getattr(self.file_repository, "get_archive_slug_map_for_file_ids", None)
-        if callable(get_archive_slug_map) and safe_file_ids:
-            try:
-                archive_slug_map.update(
-                    {
-                        int(file_id): str(archive_slug or "")
-                        for file_id, archive_slug in dict(
-                            get_archive_slug_map(
-                                user_id=int(user_id),
-                                file_ids=safe_file_ids,
-                                include_shared=True,
-                            )
-                        ).items()
-                        if int(file_id) > 0 and str(archive_slug or "").strip()
-                    }
-                )
-            except Exception:
-                pass
-
-        list_current_profiles = getattr(self.repository, "list_current_profiles", None)
-        current_profiles_by_archive: dict[str, list[dict[str, object]]] = defaultdict(list)
-        if callable(list_current_profiles) and safe_file_ids:
-            try:
-                profile_rows = list_current_profiles(
-                    user_id=int(user_id),
-                    file_ids=safe_file_ids,
-                    as_of_date=None,
-                    include_shared=True,
-                )
-            except Exception:
-                profile_rows = []
-            for profile_row in list(profile_rows or []):
-                file_id = int(profile_row.get("file_id") or 0)
-                archive_slug = str(archive_slug_map.get(file_id) or "").strip()
-                if not archive_slug:
-                    continue
-                archive_key = canonicalize_file_key(archive_slug).lower()
-                current_profiles_by_archive[archive_key].append(dict(profile_row))
-
-        priority_fields = (
-            ("estado contrato", "Estado Contrato"),
-            ("cesion a terceros", "Cesión a Terceros"),
-            ("clausula de acceso sitio", "Cláusula de Acceso Sitio"),
-            ("renta o precio vigente", "Renta o Precio Vigente"),
-            ("nombre de propietario principal", "Nombre de Propietario Principal"),
-            ("nombre beneficiario", "Nombre Beneficiario"),
-        )
-        difference_rows: list[tuple[str, list[str]]] = []
-        reference_date = datetime.utcnow().date()
-        for row in metadata_rows:
-            archive_slug = str(row.archive_slug or "").strip()
-            archive_key = canonicalize_file_key(archive_slug).lower()
-            issues: list[str] = []
-
-            for field_base, label in priority_fields:
-                value = self._metadata_text_value(row, field_base)
-                if self._is_unspecified_metadata_value(value):
-                    issues.append(f"{label} sin metadata clara")
-
-            current_profile = next(iter(current_profiles_by_archive.get(archive_key) or []), None)
-            if current_profile is not None:
-                metadata_state = self._normalize_contract_state(self._metadata_text_value(row, "estado contrato"))
-                profile_state = self._derive_profile_state(current_profile, reference_date=reference_date)
-                if metadata_state and profile_state and metadata_state != profile_state:
-                    issues.append(
-                        f"Estado metadata={metadata_state} vs documento={profile_state}"
-                    )
-
-                metadata_contract_id = self._metadata_text_value(row, "id")
-                profile_contract_id = str(current_profile.get("primary_identifier") or "").strip()
-                if (
-                    metadata_contract_id
-                    and profile_contract_id
-                    and self._normalize_text(metadata_contract_id) not in self._normalize_text(profile_contract_id)
-                ):
-                    issues.append(
-                        f"ID metadata={metadata_contract_id} vs documento={profile_contract_id}"
-                    )
-
-                metadata_site_code = self._metadata_text_value(row, "codigo de sitio")
-                profile_site_code = str(current_profile.get("secondary_identifier") or "").strip()
-                if (
-                    metadata_site_code
-                    and profile_site_code
-                    and self._normalize_text(metadata_site_code) not in self._normalize_text(profile_site_code)
-                ):
-                    issues.append(
-                        f"Sitio metadata={metadata_site_code} vs documento={profile_site_code}"
-                    )
-
-                metadata_owner = self._metadata_text_value(row, "nombre de propietario principal")
-                profile_owner = str(current_profile.get("primary_subject") or "").strip()
-                if metadata_owner and profile_owner and not self._names_loosely_match(metadata_owner, profile_owner):
-                    issues.append("Propietario difiere entre metadata y facts documentales")
-
-                metadata_beneficiary = self._metadata_text_value(row, "nombre beneficiario")
-                profile_beneficiary = str(current_profile.get("secondary_subject") or "").strip()
-                if (
-                    metadata_beneficiary
-                    and profile_beneficiary
-                    and not self._names_loosely_match(metadata_beneficiary, profile_beneficiary)
-                ):
-                    issues.append("Beneficiario difiere entre metadata y facts documentales")
-
-            if issues:
-                deduped_issues: list[str] = []
-                seen_issues: set[str] = set()
-                for issue in issues:
-                    normalized_issue = self._normalize_text(issue)
-                    if not normalized_issue or normalized_issue in seen_issues:
-                        continue
-                    seen_issues.add(normalized_issue)
-                    deduped_issues.append(issue)
-                difference_rows.append((archive_slug, deduped_issues[:4]))
-
-        if not difference_rows:
-            return (
-                "No se detectaron diferencias estructuradas obvias entre la metadata cargada y los facts documentales actuales; "
-                "las diferencias finas de cláusulas aún requieren revisión documental dirigida.",
-                max(1, len(metadata_rows)),
-            )
-
-        difference_rows.sort(key=lambda item: (-len(item[1]), self._normalize_text(item[0])))
-        fragments = [f"{archive_slug}: {'; '.join(issues)}" for archive_slug, issues in difference_rows[:8]]
-        answer = (
-            f"Se detectaron diferencias, vacíos o contradicciones relevantes en {len(difference_rows)} contratos: "
-            + " | ".join(fragments)
-            + "."
-        )
-        return answer, sum(len(issues) for _, issues in difference_rows)
 
     @staticmethod
     def _parse_reference_date(question: str) -> date | None:
@@ -3544,25 +2530,20 @@ class QuestionFactResolver:
             or any(
                 token in normalized
                 for token in (
-                    "documentos contractuales",
-                    "documentos vigentes",
                     "dicen los documentos",
                     "lo que dicen los documentos",
                     "evidencia",
-                    "texto contractual",
-                    "texto del contrato",
+                    "texto del documento",
                     "que dice",
                     "que indica",
                     "ultima modific",
                     "ultima version",
-                    "ultimo contrato vigente",
                     "modific",
                     "modificaci",
                     "version",
                     "linea de tiempo",
                     "linea del tiempo",
                     "documento base",
-                    "contrato base",
                     "clausula",
                     "contradic",
                     "pagina",
@@ -3580,8 +2561,6 @@ class QuestionFactResolver:
             for token in (
                 "parece",
                 "parecen",
-                "vigent",
-                "vigencia",
                 "coheren",
                 "coherencia",
                 "diferencias claras",
@@ -3676,11 +2655,11 @@ class QuestionFactResolver:
         score = 0
         priority_groups = (
             (90, ("estado", "actividad", "revision", "validacion", "calidad")),
-            (85, ("renta", "precio", "monto", "canon", "valor", "moneda", "uf", "iva")),
-            (80, ("fecha", "termino", "inicio", "vigencia", "duracion", "plazo", "prorroga", "aviso")),
-            (70, ("beneficiario", "propietario", "arrendador", "arrendatario", "representante", "rut")),
-            (60, ("tipo de contrato", "figura legal", "codigo de sitio", "id")),
-            (45, ("notaria", "repertorio", "comuna", "region", "direccion")),
+            (85, ("precio", "monto", "valor", "moneda", "importe", "total")),
+            (80, ("fecha", "termino", "inicio", "duracion", "plazo", "aviso")),
+            (70, ("beneficiario", "propietario", "representante", "persona", "entidad", "rut")),
+            (60, ("tipo", "categoria", "codigo", "id", "identificador")),
+            (45, ("ubicacion", "comuna", "region", "direccion")),
         )
         for weight, terms in priority_groups:
             if any(term in normalized for term in terms):
@@ -3759,91 +2738,6 @@ class QuestionFactResolver:
             rendered = "; ".join(f"{archive_slug}: {value}" for archive_slug, value in values_by_archive)
             lines.append(f"{header}: {rendered}")
         return lines[:8]
-
-    @classmethod
-    def _question_requests_monthly_equivalent(cls, question: str) -> bool:
-        normalized = cls._normalize_text(question)
-        return any(
-            token in normalized
-            for token in (
-                "canon mensual",
-                "mensual equivalente",
-                "equivalente mensual",
-                "por mes",
-            )
-        )
-
-    @classmethod
-    def _question_requests_total_initial_term(cls, question: str) -> bool:
-        normalized = cls._normalize_text(question)
-        return bool(
-            any(token in normalized for token in ("total estimado", "total de pagos", "total por canon"))
-            and any(token in normalized for token in ("vigencia inicial", "durante la vigencia inicial", "canon"))
-        )
-
-    @classmethod
-    def _question_requests_remaining_term(cls, question: str) -> bool:
-        normalized = cls._normalize_text(question)
-        return any(
-            token in normalized
-            for token in (
-                "cuanto tiempo resta",
-                "tiempo resta",
-                "resta para el vencimiento",
-                "vencimiento o renovacion",
-                "hitos deben vigilarse",
-            )
-        )
-
-    @classmethod
-    def _question_requests_contract_term_summary(cls, question: str) -> bool:
-        normalized = cls._normalize_text(question)
-        return "plazo contractual" in normalized or ("plazo" in normalized and "fecha de termino" in normalized)
-
-    @classmethod
-    def _question_requests_next_renewal_window(cls, question: str) -> bool:
-        normalized = cls._normalize_text(question)
-        return any(
-            token in normalized
-            for token in (
-                "siguiente vencimiento",
-                "ventana de salida",
-                "si existe prorroga automatica",
-            )
-        )
-
-    @classmethod
-    def _question_requests_rent_change_summary(cls, question: str) -> bool:
-        normalized = cls._normalize_text(question)
-        return any(
-            token in normalized
-            for token in (
-                "como cambian la renta",
-                "cambian la renta",
-                "renta, plazo y estado",
-            )
-        )
-
-    @classmethod
-    def _parse_numeric_metadata_value(cls, value: object | None) -> float | None:
-        if value is None or isinstance(value, bool):
-            return None
-        cleaned = re.sub(r"[^0-9,.\-]", "", str(value or "").strip())
-        if not cleaned or cleaned in {"-", ".", ","}:
-            return None
-        if "," in cleaned and "." in cleaned:
-            if cleaned.rfind(",") > cleaned.rfind("."):
-                cleaned = cleaned.replace(".", "").replace(",", ".")
-            else:
-                cleaned = cleaned.replace(",", "")
-        elif cleaned.count(",") == 1 and "." not in cleaned:
-            cleaned = cleaned.replace(",", ".")
-        else:
-            cleaned = cleaned.replace(",", "")
-        try:
-            return float(cleaned)
-        except ValueError:
-            return None
 
     @classmethod
     def _parse_payment_period_months(cls, value: object | None) -> int | None:
@@ -3928,300 +2822,6 @@ class QuestionFactResolver:
         base = cls._format_decimal_for_answer(amount)
         currency_text = str(currency or "").strip()
         return f"{base} {currency_text}".strip()
-
-    @classmethod
-    def _build_payment_frequency_phrase(
-        cls,
-        *,
-        amount: float,
-        currency: str,
-        period_text: str,
-    ) -> str:
-        normalized_period = cls._normalize_text(period_text)
-        amount_text = cls._format_amount_with_currency(amount, currency)
-        if normalized_period.startswith("cada "):
-            return f"{amount_text} {str(period_text or '').strip().lower()}".strip()
-        if "mensual" in normalized_period:
-            return f"{amount_text} mensuales"
-        if "anual" in normalized_period:
-            return f"{amount_text} anuales"
-        if "semestral" in normalized_period:
-            return f"{amount_text} semestrales"
-        return f"{amount_text} por periodo ({str(period_text or '').strip()})".strip()
-
-    @staticmethod
-    def _add_months(base_date: date, months: int) -> date:
-        total_months = (base_date.year * 12 + (base_date.month - 1)) + int(months)
-        year = total_months // 12
-        month = (total_months % 12) + 1
-        day = min(base_date.day, calendar.monthrange(year, month)[1])
-        return date(year, month, day)
-
-    @classmethod
-    def _parse_metadata_date_field(
-        cls,
-        row: ArchiveMetadataEntry,
-        *field_bases: str,
-    ) -> date | None:
-        _, raw_value = cls._find_metadata_field(row, *field_bases)
-        if raw_value is None:
-            return None
-        return parse_date_value(cls._format_metadata_value(raw_value))
-
-    @classmethod
-    def _build_monthly_equivalent_answer(
-        cls,
-        *,
-        row: ArchiveMetadataEntry,
-    ) -> str | None:
-        amount = cls._parse_numeric_metadata_value(cls._metadata_text_value(row, "renta o precio vigente"))
-        period_text = cls._metadata_text_value(row, "periodo de pago")
-        currency = cls._metadata_text_value(row, "tipo de moneda")
-        period_months = cls._parse_payment_period_months(period_text)
-        if amount is None or not period_text or period_months is None or period_months <= 0:
-            return None
-        monthly_amount = amount / float(period_months)
-        payment_phrase = cls._build_payment_frequency_phrase(
-            amount=amount,
-            currency=currency,
-            period_text=period_text,
-        )
-        monthly_text = cls._format_amount_with_currency(monthly_amount, currency)
-        return (
-            f"Segun la metadata de {row.archive_slug}, el canon vigente es {payment_phrase}, "
-            f"equivalente a {monthly_text} por mes."
-        )
-
-    @classmethod
-    def _build_total_initial_term_answer(
-        cls,
-        *,
-        row: ArchiveMetadataEntry,
-    ) -> str | None:
-        amount = cls._parse_numeric_metadata_value(cls._metadata_text_value(row, "renta o precio vigente"))
-        period_text = cls._metadata_text_value(row, "periodo de pago")
-        currency = cls._metadata_text_value(row, "tipo de moneda")
-        period_months = cls._parse_payment_period_months(period_text)
-        duration_value = cls._metadata_text_value(row, "duracion inicial del contrato")
-        duration_parts = cls._parse_duration_months_and_days(duration_value)
-        if duration_parts is None:
-            start_date = cls._parse_metadata_date_field(row, "fecha de inicio de vigencia del contrato")
-            end_date = cls._parse_metadata_date_field(row, "fecha de termino del contrato")
-            if start_date is not None and end_date is not None and end_date >= start_date:
-                duration_parts = cls._months_between_dates(start_date, end_date)
-        if amount is None or not period_text or period_months is None or duration_parts is None:
-            return None
-        duration_months, duration_days = duration_parts
-        if duration_months <= 0:
-            return None
-        estimated_periods = duration_months / float(period_months)
-        total_amount = amount * estimated_periods
-        payment_phrase = cls._build_payment_frequency_phrase(
-            amount=amount,
-            currency=currency,
-            period_text=period_text,
-        )
-        duration_text = cls._humanize_duration(duration_months, duration_days)
-        total_text = cls._format_amount_with_currency(total_amount, currency)
-        return (
-            f"Segun la metadata de {row.archive_slug}, durante la vigencia inicial ({duration_text}) "
-            f"el canon corresponde a {payment_phrase}, para un total estimado de {total_text}."
-        )
-
-    @classmethod
-    def _build_contract_term_summary_answer(
-        cls,
-        *,
-        row: ArchiveMetadataEntry,
-    ) -> str | None:
-        duration_value = cls._metadata_text_value(row, "duracion inicial del contrato")
-        duration_parts = cls._parse_duration_months_and_days(duration_value)
-        if duration_parts is None:
-            start_date = cls._parse_metadata_date_field(row, "fecha de inicio de vigencia del contrato")
-            end_date = cls._parse_metadata_date_field(row, "fecha de termino del contrato")
-            if start_date is not None and end_date is not None and end_date >= start_date:
-                duration_parts = cls._months_between_dates(start_date, end_date)
-        start_date = cls._parse_metadata_date_field(row, "fecha de inicio de vigencia del contrato")
-        end_date = cls._parse_metadata_date_field(row, "fecha de termino del contrato")
-        renewal_flag = cls._metadata_text_value(row, "prorroga automatica")
-        renewal_period = cls._metadata_text_value(row, "periodo prorroga automatica")
-        if duration_parts is None and end_date is None:
-            return None
-        fragments: list[str] = []
-        if start_date is not None:
-            fragments.append(f"parte el {start_date.strftime('%d/%m/%Y')}")
-        if duration_parts is not None:
-            duration_months, duration_days = duration_parts
-            fragments.append(f"el plazo contractual vigente es {cls._humanize_duration(duration_months, duration_days)}")
-        if end_date is not None:
-            fragments.append(f"la fecha de termino es {end_date.strftime('%d/%m/%Y')}")
-        if renewal_flag:
-            fragments.append(f"Prórroga Automática: {cls._format_metadata_value(renewal_flag)}")
-        if renewal_period and cls._normalize_text(renewal_flag) in _BOOLEAN_TRUE:
-            fragments.append(
-                "Periodo Prórroga Automática: " + cls._humanize_duration_value(renewal_period)
-            )
-        if not fragments:
-            return None
-        return f"Segun la metadata de {row.archive_slug}, " + "; ".join(fragments) + "."
-
-    @classmethod
-    def _build_remaining_term_answer(
-        cls,
-        *,
-        row: ArchiveMetadataEntry,
-        reference_date: date,
-    ) -> str | None:
-        end_date = cls._parse_metadata_date_field(row, "fecha de termino del contrato")
-        if end_date is None:
-            return None
-        notice_date = cls._parse_metadata_date_field(row, "fecha de aviso de termino del contrato")
-        renewal_flag = cls._metadata_text_value(row, "prorroga automatica")
-        renewal_period = cls._metadata_text_value(row, "periodo prorroga automatica")
-        delta_days = (end_date - reference_date).days
-        fragments: list[str] = []
-        if delta_days >= 0:
-            fragments.append(
-                f"al {reference_date.strftime('%d/%m/%Y')} restan {delta_days} dias para el vencimiento ({end_date.strftime('%d/%m/%Y')})"
-            )
-        else:
-            fragments.append(
-                f"al {reference_date.strftime('%d/%m/%Y')} el contrato aparece vencido hace {abs(delta_days)} dias ({end_date.strftime('%d/%m/%Y')})"
-            )
-        if notice_date is not None:
-            notice_text = notice_date.strftime("%d/%m/%Y")
-            if notice_date >= reference_date:
-                fragments.append(f"la fecha de aviso es {notice_text}")
-            else:
-                fragments.append(f"la fecha de aviso fue {notice_text}")
-        if renewal_flag:
-            fragments.append(f"Prórroga Automática: {cls._format_metadata_value(renewal_flag)}")
-        if renewal_period and cls._normalize_text(renewal_flag) in _BOOLEAN_TRUE:
-            fragments.append(
-                "Periodo Prórroga Automática: " + cls._humanize_duration_value(renewal_period)
-            )
-        return f"Segun la metadata de {row.archive_slug}, " + "; ".join(fragments) + "."
-
-    @classmethod
-    def _build_next_renewal_window_answer(
-        cls,
-        *,
-        row: ArchiveMetadataEntry,
-    ) -> str | None:
-        end_date = cls._parse_metadata_date_field(row, "fecha de termino del contrato")
-        notice_date = cls._parse_metadata_date_field(row, "fecha de aviso de termino del contrato")
-        renewal_flag = cls._metadata_text_value(row, "prorroga automatica")
-        renewal_period = cls._metadata_text_value(row, "periodo prorroga automatica")
-        if end_date is None:
-            return None
-        renewal_months = cls._parse_payment_period_months(renewal_period)
-        if renewal_months is None:
-            parsed_duration = cls._parse_duration_months_and_days(renewal_period)
-            if parsed_duration is not None:
-                renewal_months = parsed_duration[0]
-        if cls._normalize_text(renewal_flag) in _BOOLEAN_TRUE and renewal_months is not None and renewal_months > 0:
-            next_end_date = cls._add_months(end_date, renewal_months)
-            fragments = [
-                f"el vencimiento actual es {end_date.strftime('%d/%m/%Y')}",
-                f"el siguiente vencimiento seria {next_end_date.strftime('%d/%m/%Y')}",
-                f"Prórroga Automática: {cls._format_metadata_value(renewal_flag)}",
-                "Periodo Prórroga Automática: " + cls._humanize_duration_value(renewal_period),
-            ]
-            if notice_date is not None:
-                fragments.append(f"si no se da aviso antes del {notice_date.strftime('%d/%m/%Y')}")
-                next_notice_date = cls._add_months(notice_date, renewal_months)
-                fragments.append(
-                    f"la siguiente ventana de salida seria {next_notice_date.strftime('%d/%m/%Y')}"
-                )
-            return f"Segun la metadata de {row.archive_slug}, " + "; ".join(fragments) + "."
-        fragments = [
-            f"no existe prorroga automatica para {row.archive_slug}",
-            f"el vencimiento actual es {end_date.strftime('%d/%m/%Y')}",
-        ]
-        if notice_date is not None:
-            fragments.append(f"la ventana de salida vigente se notifica el {notice_date.strftime('%d/%m/%Y')}")
-        return "Segun la metadata, " + "; ".join(fragments) + "."
-
-    @classmethod
-    def _build_multi_row_rent_change_answer(
-        cls,
-        *,
-        metadata_rows: list[ArchiveMetadataEntry],
-    ) -> str | None:
-        if len(metadata_rows) < 2:
-            return None
-        fragments: list[str] = []
-        for row in metadata_rows:
-            field_parts: list[str] = []
-            site_code = cls._metadata_text_value(row, "codigo de sitio")
-            if site_code:
-                field_parts.append(f"Codigo de Sitio: {site_code}")
-            contract_state = cls._metadata_text_value(row, "estado contrato")
-            if contract_state:
-                field_parts.append(f"Estado Contrato: {contract_state}")
-            amount = cls._parse_numeric_metadata_value(cls._metadata_text_value(row, "renta o precio vigente"))
-            currency = cls._metadata_text_value(row, "tipo de moneda")
-            period_text = cls._metadata_text_value(row, "periodo de pago")
-            if amount is not None and period_text:
-                field_parts.append(
-                    "Canon: "
-                    + cls._build_payment_frequency_phrase(
-                        amount=amount,
-                        currency=currency,
-                        period_text=period_text,
-                    )
-                )
-            term_date = cls._parse_metadata_date_field(row, "fecha de termino del contrato")
-            if term_date is not None:
-                field_parts.append(f"Fecha de Término del Contrato: {term_date.strftime('%d/%m/%Y')}")
-            if field_parts:
-                fragments.append(f"{row.archive_slug} -> " + "; ".join(field_parts))
-        if not fragments:
-            return None
-        return "Cambios de renta y plazo segun metadata: " + " | ".join(fragments) + "."
-
-    @classmethod
-    def _build_metadata_derived_answer(
-        cls,
-        *,
-        question: str,
-        metadata_rows: list[ArchiveMetadataEntry],
-        requested_fields: list[str],
-        compare_requested: bool,
-        reference_date: date,
-    ) -> tuple[str, int] | None:
-        del requested_fields
-        if len(metadata_rows) >= 2 and cls._question_requests_rent_change_summary(question):
-            answer = cls._build_multi_row_rent_change_answer(metadata_rows=metadata_rows)
-            if answer:
-                return answer, len(metadata_rows) * 4
-        if len(metadata_rows) != 1:
-            return None
-        row = metadata_rows[0]
-        if cls._question_requests_monthly_equivalent(question):
-            answer = cls._build_monthly_equivalent_answer(row=row)
-            if answer:
-                return answer, 3
-        if cls._question_requests_total_initial_term(question):
-            answer = cls._build_total_initial_term_answer(row=row)
-            if answer:
-                return answer, 5
-        if cls._question_requests_contract_term_summary(question):
-            answer = cls._build_contract_term_summary_answer(row=row)
-            if answer:
-                return answer, 5
-        if cls._question_requests_remaining_term(question):
-            answer = cls._build_remaining_term_answer(
-                row=row,
-                reference_date=reference_date,
-            )
-            if answer:
-                return answer, 4
-        if cls._question_requests_next_renewal_window(question):
-            answer = cls._build_next_renewal_window_answer(row=row)
-            if answer:
-                return answer, 4
-        return None
 
     @classmethod
     def _build_metadata_answer(

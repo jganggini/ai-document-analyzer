@@ -5,7 +5,7 @@ from datetime import datetime
 from apps.backend.app.repositories.chat_conversations_repository import QAConversationsRepository
 
 
-class _FakeCursor:
+class _StubCursor:
     def __init__(self, rows: list[tuple[object, ...]]) -> None:
         self._rows = rows
         self.executed: list[tuple[str, dict[str, object]]] = []
@@ -22,26 +22,26 @@ class _FakeCursor:
         self.closed = True
 
 
-class _FakeConnection:
-    def __init__(self, cursor: _FakeCursor) -> None:
+class _StubConnection:
+    def __init__(self, cursor: _StubCursor) -> None:
         self._cursor = cursor
         self.closed = False
 
-    def cursor(self) -> _FakeCursor:
+    def cursor(self) -> _StubCursor:
         return self._cursor
 
     def close(self) -> None:
         self.closed = True
 
 
-class _FakeDbManager:
-    def __init__(self, connection: _FakeConnection) -> None:
+class _StubDbManager:
+    def __init__(self, connection: _StubConnection) -> None:
         self._connection = connection
 
     def table_exists(self, table_name: str) -> bool:
         return str(table_name or "").strip().lower() in {"qa_conversations", "qa_sessions"}
 
-    def get_connection(self) -> _FakeConnection:
+    def get_connection(self) -> _StubConnection:
         return self._connection
 
 
@@ -57,9 +57,9 @@ def test_list_conversations_orders_by_last_turn_activity(monkeypatch) -> None:
             "ultima respuesta",
         )
     ]
-    cursor = _FakeCursor(rows)
-    connection = _FakeConnection(cursor)
-    repository = QAConversationsRepository(_FakeDbManager(connection))
+    cursor = _StubCursor(rows)
+    connection = _StubConnection(cursor)
+    repository = QAConversationsRepository(_StubDbManager(connection))
     monkeypatch.setattr(repository, "_supports_session_link", lambda: True)
 
     result = repository.list_conversations(user_id=7)

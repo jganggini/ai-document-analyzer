@@ -226,31 +226,31 @@ class IngestionService:
         return page_analysis
 
     @staticmethod
-    def _decode_json_payload(value: object | None, *, fallback: dict[str, object] | None = None) -> dict[str, object]:
+    def _decode_json_payload(value: object | None, *, default_value: dict[str, object] | None = None) -> dict[str, object]:
         if isinstance(value, dict):
             return dict(value)
         if value is None:
-            return dict(fallback or {})
+            return dict(default_value or {})
         raw_value = value.read() if hasattr(value, "read") else value
         try:
             parsed = json.loads(str(raw_value or "{}"))
         except Exception:
-            return dict(fallback or {})
+            return dict(default_value or {})
         if isinstance(parsed, dict):
             return dict(parsed)
-        return dict(fallback or {})
+        return dict(default_value or {})
 
     @staticmethod
-    def _parse_json_value(value: object | None, *, fallback: object) -> object:
+    def _parse_json_value(value: object | None, *, default_value: object) -> object:
         if value is None:
-            return fallback
+            return default_value
         if isinstance(value, (dict, list)):
             return value
         raw_value = value.read() if hasattr(value, "read") else value
         try:
             return json.loads(str(raw_value))
         except Exception:
-            return fallback
+            return default_value
 
     @staticmethod
     def _normalize_archive_metadata_fields(
@@ -933,7 +933,7 @@ class IngestionService:
                 base_visual_summary=page_analysis.visual_summary,
                 base_layout_payload=self._decode_json_payload(
                     page_analysis.layout_json,
-                    fallback={"labels": list(page_analysis.visual_flags)},
+                    default_value={"labels": list(page_analysis.visual_flags)},
                 ),
                 base_visual_flags=list(page_analysis.visual_flags),
             )
@@ -949,15 +949,15 @@ class IngestionService:
                 "extraction_method": ocr_artifact.extraction_method,
                 "detected_blocks": self._parse_json_value(
                     ocr_artifact.detected_blocks_json,
-                    fallback=[],
+                    default_value=[],
                 ),
                 "table_extraction": self._parse_json_value(
                     ocr_artifact.table_extraction_json,
-                    fallback=[],
+                    default_value=[],
                 ),
                 "layout": self._parse_json_value(
                     page_enrichment.layout_json,
-                    fallback={},
+                    default_value={},
                 ),
             }
             ocr_json_local_path = (

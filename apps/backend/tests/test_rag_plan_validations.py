@@ -9,7 +9,7 @@ from types import MethodType
 import pytest
 
 from apps.backend.app.api.routes.questions import (
-    _build_citations_and_sources,
+    _build_citations_and_cited_sources,
     _extract_latest_conversation_scope_from_messages,
     _load_visible_scope_options,
 )
@@ -37,10 +37,14 @@ from apps.backend.app.rag.question_classifier import QuestionClassifier
 from apps.backend.app.rag.retrieval.query_service import (
     RetrievalResult,
     RetrievalPipelineService,
+    concept_coverage_score,
     extract_explicit_file_references,
+    extract_query_concepts,
     question_requests_full_document_coverage,
     question_requires_visual_grounding,
     question_requests_representative_details,
+    token_keys_are_related,
+    tokenize_text,
 )
 from apps.backend.app.rag.retrieval.oracle_vector_search import OracleVectorSearchResult
 from apps.backend.app.repositories.archive_metadata_repository import ArchiveMetadataRepository
@@ -63,7 +67,7 @@ from apps.backend.app.services.metadata_normalization_service import (
 )
 
 
-class _FakeScopeRepository:
+class _StubScopeRepository:
     def __init__(self) -> None:
         self._files_by_user = {
             7: [101, 102, 103, 104],
@@ -182,7 +186,7 @@ class _FakeScopeRepository:
         return len(self._files_by_user.get(int(user_id), []))
 
 
-class _FakeMetadataRepository:
+class _StubMetadataRepository:
     def __init__(self) -> None:
         self.created_uploads: list[dict[str, object]] = []
         self.replaced_rows: list[dict[str, object]] = []
@@ -266,7 +270,7 @@ class _FakeMetadataRepository:
         return 0
 
 
-class _FakeArchiveMetadataFileRepository:
+class _StubArchiveMetadataFileRepository:
     def __init__(
         self,
         rows: list[dict[str, object]],
@@ -333,7 +337,7 @@ class _FakeArchiveMetadataFileRepository:
 
 
 def test_scope_options_preserve_metadata_upload_csv_column_order() -> None:
-    repository = _FakeArchiveMetadataFileRepository(
+    repository = _StubArchiveMetadataFileRepository(
         [
             {
                 "file_id": 101,
@@ -382,7 +386,7 @@ def test_scope_options_preserve_metadata_upload_csv_column_order() -> None:
     ]
 
 
-class _FakeInventoryFileRepository:
+class _StubInventoryFileRepository:
     def __init__(self, rows: list[dict[str, object]]) -> None:
         self.rows = [dict(row) for row in rows]
 
@@ -391,7 +395,7 @@ class _FakeInventoryFileRepository:
         return [dict(row) for row in self.rows]
 
 
-class _RecordingScopeRepository(_FakeScopeRepository):
+class _RecordingScopeRepository(_StubScopeRepository):
     def __init__(self) -> None:
         super().__init__()
         self.calls: list[tuple[str, bool]] = []
@@ -435,7 +439,7 @@ class _RecordingScopeRepository(_FakeScopeRepository):
         )
 
 
-class _RecordingInventoryFileRepository(_FakeInventoryFileRepository):
+class _RecordingInventoryFileRepository(_StubInventoryFileRepository):
     def __init__(self, rows: list[dict[str, object]]) -> None:
         super().__init__(rows)
         self.include_shared_calls: list[bool] = []
@@ -495,14 +499,13 @@ def test_cited_sources_include_snippets_for_chat_page_preview() -> None:
         ),
     ]
 
-    citations, _sources, cited_sources, retrieved_sources = _build_citations_and_sources(
+    citations, cited_sources = _build_citations_and_cited_sources(
         analyzed_evidence=evidence,
         citation_numbers=[1],
     )
 
     assert citations[0].snippet.startswith("QUINTO")
     assert cited_sources[0].snippet.startswith("QUINTO")
-    assert retrieved_sources[0].snippet.startswith("QUINTO")
 
 
 def _build_ingestion_service_for_tests() -> IngestionService:
@@ -512,7 +515,7 @@ def _build_ingestion_service_for_tests() -> IngestionService:
 def _build_metadata_upload_service(
     *,
     tmp_path: Path,
-    repository: _FakeMetadataRepository | None = None,
+    repository: _StubMetadataRepository | None = None,
 ) -> MetadataUploadService:
     uploads_dir = tmp_path / "uploads"
     extracted_dir = tmp_path / "extracted"
@@ -528,7 +531,7 @@ def _build_metadata_upload_service(
     )
     return MetadataUploadService(
         settings=settings,
-        repository=repository or _FakeMetadataRepository(),
+        repository=repository or _StubMetadataRepository(),
     )
 
 
@@ -639,7 +642,7 @@ def test_extract_candidate_file_names_from_question_preserves_pdf_names() -> Non
 
 
 def test_scope_resolver_uses_manual_scope_first() -> None:
-    resolver = QuestionScopeResolver(_FakeScopeRepository())
+    resolver = QuestionScopeResolver(_StubScopeRepository())
     resolution = resolver.resolve(
         question="Genera un analisis de los contratos seleccionados",
         user_id=7,
@@ -667,7 +670,7 @@ def test_scope_resolver_requests_accessible_scope_queries() -> None:
 
 
 def test_scope_resolver_prefers_exact_pdf_filename_over_document_code() -> None:
-    resolver = QuestionScopeResolver(_FakeScopeRepository())
+    resolver = QuestionScopeResolver(_StubScopeRepository())
     resolution = resolver.resolve(
         question="Analiza todo el documento AI041.pdf y muestra sus campos clave.",
         user_id=7,
@@ -683,7 +686,7 @@ def test_scope_resolver_prefers_exact_pdf_filename_over_document_code() -> None:
 
 
 def test_scope_resolver_narrows_manual_scope_by_archive_slug() -> None:
-    resolver = QuestionScopeResolver(_FakeScopeRepository())
+    resolver = QuestionScopeResolver(_StubScopeRepository())
     resolution = resolver.resolve(
         question="Compara RM797_ID_1668 con RM797_ID_5515",
         user_id=7,
@@ -697,7 +700,7 @@ def test_scope_resolver_narrows_manual_scope_by_archive_slug() -> None:
 
 
 def test_scope_resolver_narrows_manual_scope_by_document_code() -> None:
-    resolver = QuestionScopeResolver(_FakeScopeRepository())
+    resolver = QuestionScopeResolver(_StubScopeRepository())
     resolution = resolver.resolve(
         question="Genera un analisis de RM797",
         user_id=7,
@@ -711,7 +714,7 @@ def test_scope_resolver_narrows_manual_scope_by_document_code() -> None:
 
 
 def test_scope_resolver_infers_scope_from_multiple_codes() -> None:
-    resolver = QuestionScopeResolver(_FakeScopeRepository())
+    resolver = QuestionScopeResolver(_StubScopeRepository())
     resolution = resolver.resolve(
         question="Compara los contratos de RM797 con RM798",
         user_id=7,
@@ -789,7 +792,7 @@ def test_build_effective_selector_question_rejects_empty_non_selector_input() ->
 
 
 def test_scope_resolver_infers_scope_from_archive_slugs() -> None:
-    resolver = QuestionScopeResolver(_FakeScopeRepository())
+    resolver = QuestionScopeResolver(_StubScopeRepository())
     resolution = resolver.resolve(
         question="Compara RM797_ID_1668 con RM797_ID_5515",
         user_id=7,
@@ -802,7 +805,7 @@ def test_scope_resolver_infers_scope_from_archive_slugs() -> None:
 
 
 def test_scope_resolver_applies_structured_archive_slug_scope_without_question_hints() -> None:
-    resolver = QuestionScopeResolver(_FakeScopeRepository())
+    resolver = QuestionScopeResolver(_StubScopeRepository())
     resolution = resolver.resolve(
         question="Profundiza en estos contratos",
         user_id=7,
@@ -817,7 +820,7 @@ def test_scope_resolver_applies_structured_archive_slug_scope_without_question_h
 
 
 def test_scope_resolver_raises_when_structured_archive_slug_is_outside_manual_scope() -> None:
-    resolver = QuestionScopeResolver(_FakeScopeRepository())
+    resolver = QuestionScopeResolver(_StubScopeRepository())
     with pytest.raises(ScopeResolutionError) as exc_info:
         resolver.resolve(
             question="Profundiza en este archivo",
@@ -832,7 +835,7 @@ def test_scope_resolver_raises_when_structured_archive_slug_is_outside_manual_sc
 
 
 def test_scope_resolver_inherits_previous_conversation_scope_for_deictic_follow_up() -> None:
-    resolver = QuestionScopeResolver(_FakeScopeRepository())
+    resolver = QuestionScopeResolver(_StubScopeRepository())
     resolution = resolver.resolve(
         question="De estos 5 sitios cuales son sus ultimos documentos firmados?",
         user_id=7,
@@ -847,7 +850,7 @@ def test_scope_resolver_inherits_previous_conversation_scope_for_deictic_follow_
 
 
 def test_scope_resolver_inherits_previous_conversation_scope_for_singular_follow_up() -> None:
-    resolver = QuestionScopeResolver(_FakeScopeRepository())
+    resolver = QuestionScopeResolver(_StubScopeRepository())
     resolution = resolver.resolve(
         question="Sobre ese mismo archivo, cita que dice la ultima modificacion sobre el acceso al terreno.",
         user_id=7,
@@ -862,7 +865,7 @@ def test_scope_resolver_inherits_previous_conversation_scope_for_singular_follow
 
 
 def test_scope_resolver_inherits_previous_scope_for_whole_document_follow_up() -> None:
-    resolver = QuestionScopeResolver(_FakeScopeRepository())
+    resolver = QuestionScopeResolver(_StubScopeRepository())
     resolution = resolver.resolve(
         question="Genera una lista valor de cada campo que consideres relevante para revisar todo el documento.",
         user_id=7,
@@ -877,8 +880,39 @@ def test_scope_resolver_inherits_previous_scope_for_whole_document_follow_up() -
     assert resolution.scope_archive_slugs == ["RM797_ID_5515"]
 
 
+def test_scope_resolver_inherits_previous_scope_for_other_document_follow_up() -> None:
+    resolver = QuestionScopeResolver(_StubScopeRepository())
+    resolution = resolver.resolve(
+        question="¿y en el otro documento?",
+        user_id=7,
+        file_ids=[],
+        allow_inferred_scope=True,
+        conversation_file_ids=[101, 102],
+        conversation_archive_slugs=["RM797_ID_1668", "RM797_ID_5515"],
+    )
+
+    assert resolution.scope_origin == "conversation"
+    assert resolution.file_ids == [101, 102]
+    assert resolution.scope_archive_slugs == ["RM797_ID_1668", "RM797_ID_5515"]
+
+
+def test_conversation_scoped_question_carries_previous_turn_context() -> None:
+    contextual = QAGraphNodes._build_conversation_scoped_question(
+        question="¿y en el otro documento?",
+        archive_slugs=["RM797_ID_1668", "RM797_ID_5515"],
+        chat_history=[
+            {"role": "user", "content": "¿Hay penalización por pago atrasado de renta? RM797"},
+            {"role": "assistant", "content": "No se especifica penalización por pago atrasado de renta."},
+        ],
+    )
+
+    assert "Follow-up question: ¿y en el otro documento?" in contextual
+    assert "Previous user question: ¿Hay penalización por pago atrasado de renta? RM797" in contextual
+    assert "RM797_ID_5515" in contextual
+
+
 def test_scope_resolver_does_not_inherit_previous_scope_for_unrelated_question() -> None:
-    resolver = QuestionScopeResolver(_FakeScopeRepository())
+    resolver = QuestionScopeResolver(_StubScopeRepository())
     resolution = resolver.resolve(
         question="Cuantos contratos estan vencidos?",
         user_id=7,
@@ -892,7 +926,7 @@ def test_scope_resolver_does_not_inherit_previous_scope_for_unrelated_question()
 
 
 def test_scope_resolver_raises_when_archive_slug_is_missing() -> None:
-    resolver = QuestionScopeResolver(_FakeScopeRepository())
+    resolver = QuestionScopeResolver(_StubScopeRepository())
     with pytest.raises(ScopeResolutionError) as exc_info:
         resolver.resolve(
             question="Compara RM797_ID_1668 con RM999_ID_1",
@@ -905,7 +939,7 @@ def test_scope_resolver_raises_when_archive_slug_is_missing() -> None:
 
 
 def test_scope_resolver_raises_when_any_code_is_missing() -> None:
-    resolver = QuestionScopeResolver(_FakeScopeRepository())
+    resolver = QuestionScopeResolver(_StubScopeRepository())
     with pytest.raises(ScopeResolutionError) as exc_info:
         resolver.resolve(
             question="Compara RM797 con RM999",
@@ -1264,7 +1298,7 @@ def test_parse_reference_date_from_question() -> None:
 def test_question_fact_resolver_answers_metadata_lookup_from_csv() -> None:
     resolver = QuestionFactResolver(
         repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(
+        file_repository=_StubArchiveMetadataFileRepository(
             [
                 {
                     "file_id": 102,
@@ -1305,7 +1339,7 @@ def test_question_fact_resolver_answers_metadata_lookup_from_csv() -> None:
 
 
 def test_question_fact_resolver_keeps_metadata_first_file_inventory_open_for_document_modification_reasoning() -> None:
-    class _MetadataAndInventoryRepository(_FakeArchiveMetadataFileRepository):
+    class _MetadataAndInventoryRepository(_StubArchiveMetadataFileRepository):
         def get_archive_slug_map_for_file_ids(
             self,
             *,
@@ -1382,7 +1416,7 @@ def test_question_fact_resolver_keeps_metadata_first_file_inventory_open_for_doc
 
 
 def test_question_fact_resolver_keeps_document_grounded_scope_within_requested_file_ids() -> None:
-    class _FakeFactsRepository:
+    class _StubFactsRepository:
         def list_group_ids_for_file_ids(
             self,
             *,
@@ -1410,8 +1444,8 @@ def test_question_fact_resolver_keeps_document_grounded_scope_within_requested_f
             return [101, 999, 102, 998]
 
     resolver = QuestionFactResolver(
-        repository=_FakeFactsRepository(),
-        file_repository=_FakeArchiveMetadataFileRepository([]),
+        repository=_StubFactsRepository(),
+        file_repository=_StubArchiveMetadataFileRepository([]),
     )
 
     resolution = resolver.resolve(
@@ -1501,13 +1535,13 @@ def test_question_fact_resolver_routes_content_filtered_document_selection_to_re
     assert resolution.answer_override is None
     assert resolution.narrowed_file_ids == [201, 202]
     assert resolution.document_phase_required is True
-    assert resolution.answerability_route == "documents_only"
+    assert resolution.answerability_route == "documents"
     assert "Documentos disponibles" not in resolution.fact_context_text
     assert file_repository.include_shared_calls == []
 
 
 def test_question_fact_resolver_prefers_associated_documents_over_inherited_metadata_field() -> None:
-    file_repository = _FakeArchiveMetadataFileRepository(
+    file_repository = _StubArchiveMetadataFileRepository(
         [
             {
                 "file_id": 201,
@@ -1827,9 +1861,9 @@ def test_graph_synthesis_per_document_keeps_representative_window() -> None:
 
 def test_graph_synthesis_per_document_metadata_question_uses_llm_not_inventory_answer() -> None:
     class _ResolvedConfig:
-        model_id = "fake-model"
+        model_id = "stub-model"
 
-    class _FakeProvider:
+    class _StubProvider:
         def __init__(self) -> None:
             self.prompts: list[str] = []
 
@@ -1859,7 +1893,7 @@ def test_graph_synthesis_per_document_metadata_question_uses_llm_not_inventory_a
         def resolve_config(self) -> _ResolvedConfig:
             return _ResolvedConfig()
 
-    provider = _FakeProvider()
+    provider = _StubProvider()
     synthesis = GraphSynthesis(provider=provider)
 
     result = synthesis.synthesize(
@@ -1897,7 +1931,7 @@ def test_graph_synthesis_per_document_metadata_question_uses_llm_not_inventory_a
     )
 
     assert provider.prompts
-    assert result.model_used == "langgraph-oci-synthesis:fake-model"
+    assert result.model_used == "langgraph-oci-synthesis:stub-model"
     assert "Metadata resuelta" in result.answer_text
     assert "Inventario documental completo" not in result.answer_text
     assert "## Documentos del expediente" not in result.answer_text
@@ -1907,9 +1941,9 @@ def test_graph_synthesis_per_document_metadata_question_uses_llm_not_inventory_a
 
 def test_graph_synthesis_retries_tabular_request_when_first_answer_lacks_markdown_table() -> None:
     class _ResolvedConfig:
-        model_id = "fake-model"
+        model_id = "stub-model"
 
-    class _FakeProvider:
+    class _StubProvider:
         def __init__(self) -> None:
             self.prompts: list[str] = []
             self.responses = [
@@ -1947,7 +1981,7 @@ def test_graph_synthesis_retries_tabular_request_when_first_answer_lacks_markdow
         def resolve_config(self) -> _ResolvedConfig:
             return _ResolvedConfig()
 
-    provider = _FakeProvider()
+    provider = _StubProvider()
     synthesis = GraphSynthesis(provider=provider)
 
     result = synthesis.synthesize(
@@ -2027,7 +2061,7 @@ def test_markdown_selector_expected_terms_normalize_repaired_filenames_and_slash
 
 
 def test_hybrid_answer_tool_keeps_all_evidence_for_per_document_mode() -> None:
-    class _FakeSynthesisAgent:
+    class _StubSynthesisAgent:
         def __init__(self) -> None:
             self.calls: list[dict[str, object]] = []
 
@@ -2041,17 +2075,17 @@ def test_hybrid_answer_tool_keeps_all_evidence_for_per_document_mode() -> None:
                 key_points=[names],
                 obligations=[],
                 citation_source_numbers=[int(item.source_number) for item in evidence],
-                model_used="fake-synthesis",
+                model_used="stub-synthesis",
             )
 
-    class _FakePageVisionTool:
+    class _StubPageVisionTool:
         def analyze(self, **kwargs) -> VisualInspectionResult:
             raise AssertionError("visual analysis is not expected in this test")
 
-    synthesis_agent = _FakeSynthesisAgent()
+    synthesis_agent = _StubSynthesisAgent()
     tool = HybridAnswerTool(
         settings=Settings(_env_file=None, ANSWER_MAX_EVIDENCE=3),
-        page_vision_tool=_FakePageVisionTool(),
+        page_vision_tool=_StubPageVisionTool(),
         synthesis_agent=synthesis_agent,
     )
     evidence = [
@@ -2075,7 +2109,7 @@ def test_hybrid_answer_tool_keeps_all_evidence_for_per_document_mode() -> None:
 
 
 def test_hybrid_answer_tool_keeps_all_evidence_for_explicit_full_document_request() -> None:
-    class _FakeSynthesisAgent:
+    class _StubSynthesisAgent:
         def __init__(self) -> None:
             self.calls: list[dict[str, object]] = []
 
@@ -2089,17 +2123,17 @@ def test_hybrid_answer_tool_keeps_all_evidence_for_explicit_full_document_reques
                 key_points=[pages],
                 obligations=[],
                 citation_source_numbers=[int(item.source_number) for item in evidence],
-                model_used="fake-synthesis",
+                model_used="stub-synthesis",
             )
 
-    class _FakePageVisionTool:
+    class _StubPageVisionTool:
         def analyze(self, **kwargs) -> VisualInspectionResult:
             raise AssertionError("visual analysis is not expected in this test")
 
-    synthesis_agent = _FakeSynthesisAgent()
+    synthesis_agent = _StubSynthesisAgent()
     tool = HybridAnswerTool(
         settings=Settings(_env_file=None, ANSWER_MAX_EVIDENCE=3),
-        page_vision_tool=_FakePageVisionTool(),
+        page_vision_tool=_StubPageVisionTool(),
         synthesis_agent=synthesis_agent,
     )
     evidence = [
@@ -2130,7 +2164,7 @@ def test_hybrid_answer_tool_keeps_all_evidence_for_explicit_full_document_reques
 
 
 def test_hybrid_answer_tool_prepends_metadata_table_for_mixed_document_answer() -> None:
-    class _FakeSynthesisAgent:
+    class _StubSynthesisAgent:
         def run(self, **kwargs) -> LLMResult:
             del kwargs
             return LLMResult(
@@ -2144,17 +2178,17 @@ def test_hybrid_answer_tool_prepends_metadata_table_for_mixed_document_answer() 
                 key_points=["No se encontro penalizacion documental."],
                 obligations=[],
                 citation_source_numbers=[1, 2],
-                model_used="fake-synthesis",
+                model_used="stub-synthesis",
             )
 
-    class _FakePageVisionTool:
+    class _StubPageVisionTool:
         def analyze(self, **kwargs) -> VisualInspectionResult:
             raise AssertionError("visual analysis is not expected in this test")
 
     tool = HybridAnswerTool(
         settings=Settings(_env_file=None, ANSWER_MAX_EVIDENCE=5),
-        page_vision_tool=_FakePageVisionTool(),
-        synthesis_agent=_FakeSynthesisAgent(),
+        page_vision_tool=_StubPageVisionTool(),
+        synthesis_agent=_StubSynthesisAgent(),
     )
 
     result = tool.answer(
@@ -2207,7 +2241,7 @@ def test_hybrid_answer_tool_prepends_metadata_table_for_mixed_document_answer() 
 def test_question_fact_resolver_answers_global_multi_contract_site_question_from_metadata() -> None:
     resolver = QuestionFactResolver(
         repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(
+        file_repository=_StubArchiveMetadataFileRepository(
             [
                 {
                     "file_id": 101,
@@ -2261,7 +2295,7 @@ def test_question_fact_resolver_answers_global_multi_contract_site_question_from
 def test_question_fact_resolver_prefers_requested_metadata_fields_over_generic_aggregate_counts() -> None:
     resolver = QuestionFactResolver(
         repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(
+        file_repository=_StubArchiveMetadataFileRepository(
             [
                 {
                     "file_id": 101,
@@ -2308,357 +2342,10 @@ def test_question_fact_resolver_prefers_requested_metadata_fields_over_generic_a
     assert "| ESTAN041_ID_14010 | MINISTERIO DE BIENES NACIONALES | MINISTERIO DE BIENES NACIONALES |" in resolution.answer_override
     assert "| ZU163_ID_3630 | ATC SITIOS CHILE S.A. | MINISTERIO DE BIENES NACIONALES |" in resolution.answer_override
     assert "hay 2 beneficiarios distintos" not in resolution.answer_override
-
-
-def test_question_fact_resolver_answers_contract_state_counts_from_global_metadata() -> None:
-    resolver = QuestionFactResolver(
-        repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(
-            [
-                {
-                    "file_id": 201,
-                    "archive_slug": "A_ID_1",
-                    "metadata_json": json.dumps(
-                        {"file": "A_ID_1", "fields": {"Estado Contrato": "Vigente"}},
-                        ensure_ascii=False,
-                    ),
-                },
-                {
-                    "file_id": 202,
-                    "archive_slug": "B_ID_2",
-                    "metadata_json": json.dumps(
-                        {"file": "B_ID_2", "fields": {"Estado Contrato": "Vigente"}},
-                        ensure_ascii=False,
-                    ),
-                },
-                {
-                    "file_id": 203,
-                    "archive_slug": "C_ID_3",
-                    "metadata_json": json.dumps(
-                        {"file": "C_ID_3", "fields": {"Estado Contrato": "Vencido"}},
-                        ensure_ascii=False,
-                    ),
-                },
-                {
-                    "file_id": 204,
-                    "archive_slug": "D_ID_4",
-                    "metadata_json": json.dumps(
-                        {"file": "D_ID_4", "fields": {"Estado Contrato": "Terminado"}},
-                        ensure_ascii=False,
-                    ),
-                },
-                {
-                    "file_id": 205,
-                    "archive_slug": "E_ID_5",
-                    "metadata_json": json.dumps(
-                        {"file": "E_ID_5", "fields": {"Estado Contrato": ""}},
-                        ensure_ascii=False,
-                    ),
-                },
-            ]
-        ),
-    )
-
-    resolution = resolver.resolve(
-        question_class="analytics",
-        question="Cuantos contratos estan vigentes, vencidos o terminados? Reporta tambien los sin estado.",
-        user_id=7,
-        file_ids=[],
-    )
-
-    assert resolution.answer_override == (
-        "Según la metadata cargada: vigentes=2, vencidos=1, terminados=1, sin estado=1."
-    )
-    assert resolution.facts_used_count == 5
-
-
-def test_question_fact_resolver_answers_top_document_versions_from_inventory() -> None:
-    resolver = QuestionFactResolver(
-        repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(
-            [],
-            file_rows=[
-                {"file_id": 301, "archive_slug": "AT565_ID_3820"},
-                {"file_id": 302, "archive_slug": "AT565_ID_3820"},
-                {"file_id": 303, "archive_slug": "AT565_ID_3820"},
-                {"file_id": 304, "archive_slug": "RM797_ID_5515"},
-                {"file_id": 305, "archive_slug": "RM797_ID_5515"},
-                {"file_id": 306, "archive_slug": "AI041_ID_49"},
-            ],
-        ),
-    )
-
-    resolution = resolver.resolve(
-        question_class="analytics",
-        question="Que contratos tienen mas versiones documentales o PDFs asociados?",
-        user_id=7,
-        file_ids=[],
-    )
-
-    assert resolution.answer_override is not None
-    assert "AT565_ID_3820 (3 PDFs)" in resolution.answer_override
-    assert "RM797_ID_5515 (2 PDFs)" in resolution.answer_override
-    assert "AI041_ID_49 (1 PDFs)" in resolution.answer_override
-    assert resolution.facts_used_count == 6
-
-
-def test_question_fact_resolver_answers_entel_figure_count_from_metadata() -> None:
-    resolver = QuestionFactResolver(
-        repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(
-            [
-                {
-                    "file_id": 401,
-                    "archive_slug": "A_ID_1",
-                    "metadata_json": json.dumps(
-                        {"file": "A_ID_1", "fields": {"Figura Legal": "ENTEL PCS", "Estado Contrato": "Vigente"}},
-                        ensure_ascii=False,
-                    ),
-                },
-                {
-                    "file_id": 402,
-                    "archive_slug": "B_ID_2",
-                    "metadata_json": json.dumps(
-                        {"file": "B_ID_2", "fields": {"Figura Legal": "ENTEL PCS", "Estado Contrato": "Vigente"}},
-                        ensure_ascii=False,
-                    ),
-                },
-                {
-                    "file_id": 403,
-                    "archive_slug": "C_ID_3",
-                    "metadata_json": json.dumps(
-                        {"file": "C_ID_3", "fields": {"Figura Legal": "ENTEL PCS", "Estado Contrato": "Terminado"}},
-                        ensure_ascii=False,
-                    ),
-                },
-                {
-                    "file_id": 404,
-                    "archive_slug": "D_ID_4",
-                    "metadata_json": json.dumps(
-                        {"file": "D_ID_4", "fields": {"Figura Legal": "ENTEL S.A.", "Estado Contrato": "Vigente"}},
-                        ensure_ascii=False,
-                    ),
-                },
-            ]
-        ),
-    )
-
-    resolution = resolver.resolve(
-        question_class="analytics",
-        question="Cuantos contratos vigentes fueron firmados por ENTEL PCS?",
-        user_id=7,
-        file_ids=[],
-    )
-
-    assert resolution.answer_override == (
-        "Se identificaron 2 contratos vigentes firmados por ENTEL PCS según la metadata cargada."
-    )
-    assert resolution.facts_used_count == 2
-
-
-def test_question_fact_resolver_answers_generic_site_count_filtered_by_region() -> None:
-    resolver = QuestionFactResolver(
-        repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(
-            [
-                {
-                    "file_id": 101,
-                    "archive_slug": "RM797_ID_1668",
-                    "metadata_json": json.dumps(
-                        {
-                            "file": "RM797_ID_1668",
-                            "fields": {
-                                "Region": "Region Metropolitana de Santiago",
-                                "Codigo de Sitio": "RM797",
-                            },
-                        },
-                        ensure_ascii=False,
-                    ),
-                },
-                {
-                    "file_id": 102,
-                    "archive_slug": "RM797_ID_5515",
-                    "metadata_json": json.dumps(
-                        {
-                            "file": "RM797_ID_5515",
-                            "fields": {
-                                "Region": "Region Metropolitana de Santiago",
-                                "Codigo de Sitio": "RM797",
-                            },
-                        },
-                        ensure_ascii=False,
-                    ),
-                },
-                {
-                    "file_id": 103,
-                    "archive_slug": "SA561_ID_2198",
-                    "metadata_json": json.dumps(
-                        {
-                            "file": "SA561_ID_2198",
-                            "fields": {
-                                "Region": "Region Metropolitana de Santiago",
-                                "Codigo de Sitio": "SA561",
-                            },
-                        },
-                        ensure_ascii=False,
-                    ),
-                },
-                {
-                    "file_id": 104,
-                    "archive_slug": "LA122_ID_3979",
-                    "metadata_json": json.dumps(
-                        {
-                            "file": "LA122_ID_3979",
-                            "fields": {
-                                "Region": "Region de Los Lagos",
-                                "Codigo de Sitio": "LA122",
-                            },
-                        },
-                        ensure_ascii=False,
-                    ),
-                },
-            ]
-        ),
-    )
-
-    resolution = resolver.resolve(
-        question_class="analytics",
-        question="Segun la metadata cuantos sitios hay en la region metropolitana de Santiago?",
-        user_id=7,
-        file_ids=[],
-    )
-
-    assert resolution.answer_override is not None
-    assert "hay 2 sitios distintos" in resolution.answer_override
-    assert "Region=Region Metropolitana de Santiago" in resolution.answer_override
-    assert "RM797" in resolution.answer_override
-    assert "SA561" in resolution.answer_override
-    assert resolution.facts_used_count == 3
-    assert resolution.narrowed_file_ids == [101, 102, 103]
-
-
-def test_question_fact_resolver_metadata_comparison_fallback_handles_region_aggregate() -> None:
-    resolver = QuestionFactResolver(
-        repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(
-            [
-                {
-                    "file_id": 101,
-                    "archive_slug": "RM797_ID_1668",
-                    "metadata_json": json.dumps(
-                        {
-                            "file": "RM797_ID_1668",
-                            "fields": {
-                                "Region": "Region Metropolitana de Santiago",
-                                "Codigo de Sitio": "RM797",
-                            },
-                        },
-                        ensure_ascii=False,
-                    ),
-                },
-                {
-                    "file_id": 102,
-                    "archive_slug": "RM797_ID_5515",
-                    "metadata_json": json.dumps(
-                        {
-                            "file": "RM797_ID_5515",
-                            "fields": {
-                                "Region": "Region Metropolitana de Santiago",
-                                "Codigo de Sitio": "RM797",
-                            },
-                        },
-                        ensure_ascii=False,
-                    ),
-                },
-            ]
-        ),
-    )
-
-    resolution = resolver.resolve(
-        question_class="metadata_comparison",
-        question="Segun la metadata cuantos sitios hay en la region metropolitana de Santiago?",
-        user_id=7,
-        file_ids=[],
-    )
-
-    assert resolution.answer_override is not None
-    assert "hay 1 sitios distintos" in resolution.answer_override
-    assert resolution.facts_used_count == 2
-
-
-def test_question_fact_resolver_answers_natural_contract_listing_with_metadata_filters() -> None:
-    resolver = QuestionFactResolver(
-        repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(
-            [
-                {
-                    "file_id": 111,
-                    "archive_slug": "RM797_ID_1668",
-                    "metadata_json": json.dumps(
-                        {
-                            "file": "RM797_ID_1668",
-                            "fields": {
-                                "Region": "Region Metropolitana de Santiago",
-                                "Estado Contrato": "Vigente",
-                            },
-                        },
-                        ensure_ascii=False,
-                    ),
-                },
-                {
-                    "file_id": 112,
-                    "archive_slug": "RM797_ID_5515",
-                    "metadata_json": json.dumps(
-                        {
-                            "file": "RM797_ID_5515",
-                            "fields": {
-                                "Region": "Region Metropolitana de Santiago",
-                                "Estado Contrato": "Terminado",
-                            },
-                        },
-                        ensure_ascii=False,
-                    ),
-                },
-                {
-                    "file_id": 113,
-                    "archive_slug": "LA122_ID_3979",
-                    "metadata_json": json.dumps(
-                        {
-                            "file": "LA122_ID_3979",
-                            "fields": {
-                                "Region": "Region Metropolitana de Santiago",
-                                "Estado Contrato": "Vigente",
-                            },
-                        },
-                        ensure_ascii=False,
-                    ),
-                },
-            ]
-        ),
-    )
-
-    resolution = resolver.resolve(
-        question_class="analytics",
-        question="me puedes indicar los contratos vigentes en la region metropolitana?",
-        user_id=7,
-        file_ids=[],
-    )
-
-    assert resolution.answer_override is not None
-    assert "hay 2 contratos" in resolution.answer_override
-    assert "Estado Contrato=Vigente" in resolution.answer_override
-    assert "Region=Region Metropolitana de Santiago" in resolution.answer_override
-    assert "RM797_ID_1668" in resolution.answer_override
-    assert "LA122_ID_3979" in resolution.answer_override
-    assert "RM797_ID_5515" not in resolution.answer_override
-    assert resolution.facts_used_count == 2
-    assert resolution.narrowed_file_ids == [111, 113]
-
-
 def test_question_fact_resolver_answers_dynamic_runtime_metadata_lookup() -> None:
     resolver = QuestionFactResolver(
         repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(
+        file_repository=_StubArchiveMetadataFileRepository(
             [
                 {
                     "file_id": 501,
@@ -2695,7 +2382,7 @@ def test_question_fact_resolver_answers_dynamic_runtime_metadata_lookup() -> Non
 def test_question_fact_resolver_answers_dynamic_metadata_aggregate_from_runtime_schema() -> None:
     resolver = QuestionFactResolver(
         repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(
+        file_repository=_StubArchiveMetadataFileRepository(
             [
                 {
                     "file_id": 601,
@@ -2778,7 +2465,7 @@ def test_question_fact_resolver_summarizes_patterns_for_requested_dynamic_metada
         )
     resolver = QuestionFactResolver(
         repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(rows),
+        file_repository=_StubArchiveMetadataFileRepository(rows),
     )
 
     resolution = resolver.resolve(
@@ -2800,7 +2487,7 @@ def test_question_fact_resolver_summarizes_patterns_for_requested_dynamic_metada
 def test_question_fact_resolver_answers_dynamic_duplicate_metadata_aggregate_from_runtime_schema() -> None:
     resolver = QuestionFactResolver(
         repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(
+        file_repository=_StubArchiveMetadataFileRepository(
             [
                 {
                     "file_id": 701,
@@ -2866,7 +2553,7 @@ def test_question_fact_resolver_answers_dynamic_duplicate_metadata_aggregate_fro
 def test_question_fact_resolver_confirms_expected_metadata_value() -> None:
     resolver = QuestionFactResolver(
         repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(
+        file_repository=_StubArchiveMetadataFileRepository(
             [
                 {
                     "file_id": 102,
@@ -2896,48 +2583,10 @@ def test_question_fact_resolver_confirms_expected_metadata_value() -> None:
 
     assert resolution.answer_override == "Si, en la metadata de RM797_ID_5515 Forma de Pago es Deposito."
     assert resolution.facts_used_count == 1
-
-
-def test_question_fact_resolver_uses_beneficiary_aliases_for_rent_receiver_question() -> None:
-    resolver = QuestionFactResolver(
-        repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(
-            [
-                {
-                    "file_id": 102,
-                    "archive_slug": "RM797_ID_5515",
-                    "metadata_json": json.dumps(
-                        {
-                            "file": "RM797_ID_5515",
-                            "fields": {
-                                "Nombre Beneficiario": "SERVICIOS DE ESTETICA Y BELLEZA PERFECT NAILS LIMITADA",
-                                "Rut Beneficiario del contrato": "76433960-6",
-                            },
-                        },
-                        ensure_ascii=False,
-                    ),
-                }
-            ]
-        ),
-    )
-
-    resolution = resolver.resolve(
-        question_class="metadata_comparison",
-        question="Para RM797_ID_5515, quien recibe la renta y cual es su RUT?",
-        user_id=7,
-        file_ids=[102],
-    )
-
-    assert resolution.answer_override is not None
-    assert "| Nombre Beneficiario | SERVICIOS DE ESTETICA Y BELLEZA PERFECT NAILS LIMITADA |" in resolution.answer_override
-    assert "| Rut Beneficiario del contrato | 76433960-6 |" in resolution.answer_override
-    assert resolution.document_phase_required is False
-
-
 def test_question_fact_resolver_routes_uncovered_metadata_question_to_document_followup() -> None:
     resolver = QuestionFactResolver(
         repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(
+        file_repository=_StubArchiveMetadataFileRepository(
             [
                 {
                     "file_id": 101,
@@ -2983,7 +2632,7 @@ def test_question_fact_resolver_routes_uncovered_metadata_question_to_document_f
     assert resolution.narrowed_file_ids == [101, 102]
     assert resolution.answer_override is None
     assert resolution.document_phase_required is True
-    assert resolution.answerability_route == "metadata_plus_documents"
+    assert resolution.answerability_route == "hybrid"
     assert "Resolved metadata facts:" in resolution.fact_context_text
     assert "RM797_ID_1668: Renta o Precio Vigente=442" in resolution.fact_context_text
     assert "RM797_ID_5515: Renta o Precio Vigente=45" in resolution.fact_context_text
@@ -2993,7 +2642,7 @@ def test_question_fact_resolver_routes_uncovered_metadata_question_to_document_f
 def test_question_fact_resolver_uses_agnostic_metadata_coverage_for_document_followup() -> None:
     resolver = QuestionFactResolver(
         repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(
+        file_repository=_StubArchiveMetadataFileRepository(
             [
                 {
                     "file_id": 201,
@@ -3023,7 +2672,7 @@ def test_question_fact_resolver_uses_agnostic_metadata_coverage_for_document_fol
     assert resolution.narrowed_file_ids == [201]
     assert resolution.answer_override is None
     assert resolution.document_phase_required is True
-    assert resolution.answerability_route == "metadata_plus_documents"
+    assert resolution.answerability_route == "hybrid"
     assert "OP123_ID_A: Fecha de Entrega=10/01/2026" in resolution.fact_context_text
 
 
@@ -3040,7 +2689,7 @@ def test_resolve_facts_keeps_retrieval_open_when_metadata_needs_documents() -> N
                 resolved_archive_slugs=["OP123_ID_A"],
                 resolved_metadata_fields=["Fecha de Entrega"],
                 document_phase_required=True,
-                answerability_route="metadata_plus_documents",
+                answerability_route="hybrid",
             )
 
     nodes = QAGraphNodes(
@@ -3068,16 +2717,14 @@ def test_resolve_facts_keeps_retrieval_open_when_metadata_needs_documents() -> N
         }
     )
 
-    assert patch["skip_retrieval"] is False
     assert patch["answer_override"] is None
-    assert patch["answerability_route"] == "metadata_plus_documents"
-    assert patch["retrieval_route"] == ""
+    assert patch["answerability_route"] == "hybrid"
 
 
-def test_retrieval_question_expands_metadata_plus_documents_generically() -> None:
+def test_retrieval_question_expands_hybrid_generically() -> None:
     expanded = _build_retrieval_question(
         question="¿Hay justificación por retraso en la entrega? OP123",
-        answerability_route="metadata_plus_documents",
+        answerability_route="hybrid",
     )
 
     assert "justificación por retraso en la entrega" in expanded
@@ -3088,20 +2735,20 @@ def test_retrieval_question_expands_metadata_plus_documents_generically() -> Non
     assert "ausencia de informacion relevante" in expanded
 
 
-def test_retrieval_question_does_not_expand_structured_only_metadata_queries() -> None:
+def test_retrieval_question_does_not_expand_metadata_queries() -> None:
     question = "Para RM797_ID_5515, quien recibe la renta y cual es su RUT?"
 
     assert _build_retrieval_question(
         question=question,
-        answerability_route="structured_only",
+        answerability_route="metadata",
     ) == question
 
 
-def test_retrieve_candidates_boosts_metadata_plus_documents_coverage_generically() -> None:
+def test_retrieve_candidates_boosts_hybrid_coverage_generically() -> None:
     class _Plan:
         top_k = 5
         strategy = "fast-grounded"
-        selected_provider = "fake"
+        selected_provider = "stub"
 
     class _Supervisor:
         def __init__(self) -> None:
@@ -3146,7 +2793,7 @@ def test_retrieve_candidates_boosts_metadata_plus_documents_coverage_generically
             "user_id": 7,
             "file_ids": [201, 202],
             "resolved_archive_slugs": ["OP123_ID_A", "OP123_ID_B"],
-            "answerability_route": "metadata_plus_documents",
+            "answerability_route": "hybrid",
             "scope_origin": "metadata",
         }
     )
@@ -3165,7 +2812,7 @@ def test_retrieve_candidates_boosts_metadata_plus_documents_coverage_generically
 def test_question_fact_resolver_dedupes_repeated_archive_metadata_rows() -> None:
     resolver = QuestionFactResolver(
         repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(
+        file_repository=_StubArchiveMetadataFileRepository(
             [
                 {
                     "file_id": 7,
@@ -3217,7 +2864,7 @@ def test_question_fact_resolver_dedupes_repeated_archive_metadata_rows() -> None
 def test_question_fact_resolver_compares_metadata_between_files() -> None:
     resolver = QuestionFactResolver(
         repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(
+        file_repository=_StubArchiveMetadataFileRepository(
             [
                 {
                     "file_id": 101,
@@ -3272,7 +2919,7 @@ def test_question_fact_resolver_compares_metadata_between_files() -> None:
 def test_question_fact_resolver_routes_interpretive_archive_comparison_to_document_followup() -> None:
     resolver = QuestionFactResolver(
         repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(
+        file_repository=_StubArchiveMetadataFileRepository(
             [
                 {
                     "file_id": 91,
@@ -3363,7 +3010,7 @@ def test_question_fact_resolver_routes_interpretive_archive_comparison_to_docume
 def test_question_fact_resolver_routes_metadata_vs_documents_question_to_document_followup() -> None:
     resolver = QuestionFactResolver(
         repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(
+        file_repository=_StubArchiveMetadataFileRepository(
             [
                 {
                     "file_id": 301,
@@ -3396,134 +3043,10 @@ def test_question_fact_resolver_routes_metadata_vs_documents_question_to_documen
     assert resolution.narrowed_file_ids == [301]
     assert "Resolved metadata facts:" in resolution.fact_context_text
     assert "TSM10_ID_20441: Estado Contrato=Vigente" in resolution.fact_context_text
-
-
-def test_question_fact_resolver_uses_docling_quality_for_metadata_document_validation_when_available() -> None:
-    resolver = QuestionFactResolver(
-        repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(
-            [
-                {
-                    "file_id": 301,
-                    "archive_slug": "CASE_ID_1",
-                    "metadata_json": json.dumps(
-                        {
-                            "file": "CASE_ID_1",
-                            "fields": {
-                                "Estado Contrato": "Vigente",
-                                "Revision Final": "REVISADO OK",
-                            },
-                        },
-                        ensure_ascii=False,
-                    ),
-                }
-            ],
-            page_quality_rows=[
-                {
-                    "file_id": 301,
-                    "archive_slug": "CASE_ID_1",
-                    "file_name": "CASE_CONTRATO.pdf",
-                    "status": "failed",
-                    "file_page_count": 16,
-                    "indexed_pages_count": 0,
-                    "encrypted_or_unreadable_pages_count": 1,
-                    "avg_ocr_confidence": 0.0,
-                    "avg_text_quality": 0.0,
-                    "ocr_methods": ["docling_rapidocr"],
-                    "visual_flags": ["encrypted_pdf"],
-                }
-            ],
-        ),
-    )
-
-    resolution = resolver.resolve(
-        question_class="analytics",
-        question="La metadata coincide con lo que dicen los documentos contractuales vigentes?",
-        user_id=7,
-        file_ids=[301],
-        metadata_fields=["Estado Contrato", "Revision Final"],
-    )
-
-    assert resolution.answer_override is not None
-    assert "consistencia no validable aun" in resolution.answer_override
-    assert "CASE_CONTRATO.pdf" in resolution.answer_override
-    assert "PDF cifrado" in resolution.answer_override
-    assert resolution.metadata_only_reason == "docling_quality_review"
-
-
-def test_question_fact_resolver_prioritizes_docling_quality_for_human_review() -> None:
-    resolver = QuestionFactResolver(
-        repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(
-            [
-                {
-                    "file_id": 301,
-                    "archive_slug": "TSM10_ID_20441",
-                    "metadata_json": json.dumps(
-                        {
-                            "file": "TSM10_ID_20441",
-                            "fields": {
-                                "Estado Contrato": "Vigente",
-                                "Revisión Final": "REVISADO OK",
-                            },
-                        },
-                        ensure_ascii=False,
-                    ),
-                }
-            ],
-            file_rows=[
-                {
-                    "file_id": 301,
-                    "archive_slug": "TSM10_ID_20441",
-                    "file_input_file_name": "TSM10_CONTRATO.pdf",
-                    "file_code": "TSM10",
-                    "file_state": 3,
-                    "file_page_count": 1,
-                }
-            ],
-            page_quality_rows=[
-                {
-                    "file_id": 301,
-                    "archive_slug": "TSM10_ID_20441",
-                    "file_name": "TSM10_CONTRATO.pdf",
-                    "status": "completed",
-                    "file_page_count": 1,
-                    "indexed_pages_count": 1,
-                    "encrypted_or_unreadable_pages_count": 1,
-                    "low_ocr_pages_count": 1,
-                    "blank_pages_count": 0,
-                    "avg_ocr_confidence": 0.41,
-                    "min_ocr_confidence": 0.41,
-                    "avg_text_quality": 0.32,
-                    "ocr_methods": ["docling_rapidocr"],
-                    "visual_flags": ["low_ocr_confidence", "encrypted_pdf"],
-                }
-            ],
-        ),
-    )
-
-    resolution = resolver.resolve(
-        question_class="metadata_comparison",
-        question="Que campos presentan ausencia, ambiguedad o contradiccion y requieren revision humana?",
-        user_id=7,
-        file_ids=[301],
-        metadata_mode="metadata_first",
-        metadata_fields=["Estado Contrato", "Revisión Final"],
-    )
-
-    assert resolution.answer_override is not None
-    assert "requiere revision humana" in resolution.answer_override
-    assert "TSM10_CONTRATO.pdf" in resolution.answer_override
-    assert "cifrado" in resolution.answer_override
-    assert "REVISADO OK" in resolution.answer_override
-    assert resolution.metadata_phase_used is True
-    assert resolution.metadata_only_reason == "docling_quality_review"
-
-
 def test_question_fact_resolver_does_not_short_circuit_ocr_content_request_to_quality_review() -> None:
     resolver = QuestionFactResolver(
         repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(
+        file_repository=_StubArchiveMetadataFileRepository(
             [
                 {
                     "file_id": 301,
@@ -3588,80 +3111,6 @@ def test_question_fact_resolver_does_not_short_circuit_ocr_content_request_to_qu
     assert resolution.narrowed_file_ids == [301]
     assert "Archive metadata context:" in resolution.fact_context_text
     assert "Renta o Precio Vigente=14 UF mensuales" in resolution.fact_context_text
-
-
-def test_question_fact_resolver_counts_docling_encrypted_pdfs_for_review_priority() -> None:
-    metadata_rows = []
-    file_rows = []
-    page_quality_rows = []
-    for index, archive_slug in enumerate(["ZB352_ID_2668", "RM797_ID_5515", "TSM10_ID_20441"], start=1):
-        metadata_rows.append(
-            {
-                "file_id": index,
-                "archive_slug": archive_slug,
-                "metadata_json": json.dumps(
-                    {
-                        "file": archive_slug,
-                        "fields": {
-                            "Estado Contrato": "Vigente",
-                            "Revisión Final": "REVISADO OK",
-                        },
-                    },
-                    ensure_ascii=False,
-                ),
-            }
-        )
-        file_rows.append(
-            {
-                "file_id": index,
-                "archive_slug": archive_slug,
-                "file_input_file_name": f"{archive_slug}_CONTRATO.pdf",
-                "file_code": archive_slug.split("_", 1)[0],
-                "file_state": 3,
-                "file_page_count": 1,
-            }
-        )
-        page_quality_rows.append(
-            {
-                "file_id": index,
-                "archive_slug": archive_slug,
-                "file_name": f"{archive_slug}_CONTRATO.pdf",
-                "status": "completed",
-                "file_page_count": 1,
-                "indexed_pages_count": 1,
-                "encrypted_or_unreadable_pages_count": 1,
-                "low_ocr_pages_count": 1,
-                "blank_pages_count": 0,
-                "avg_ocr_confidence": 0.25,
-                "avg_text_quality": 0.2,
-                "ocr_methods": ["docling_rapidocr"],
-                "visual_flags": ["encrypted_pdf"],
-            }
-        )
-    resolver = QuestionFactResolver(
-        repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(
-            metadata_rows,
-            file_rows=file_rows,
-            page_quality_rows=page_quality_rows,
-        ),
-    )
-
-    resolution = resolver.resolve(
-        question_class="metadata_comparison",
-        question="Que expedientes deberian priorizarse para revision humana por OCR, cifrado o inconsistencias?",
-        user_id=7,
-        file_ids=[1, 2, 3],
-        metadata_mode="metadata_first",
-        metadata_fields=["Revisión Final", "Estado Contrato"],
-    )
-
-    assert resolution.answer_override is not None
-    assert "3 PDF cifrados" in resolution.answer_override
-    assert "1 de 1 PDF cifrado" in resolution.answer_override
-    assert "consistencia no validable aun" in resolution.answer_override
-
-
 def test_question_fact_resolver_extracts_date_field_when_question_text_is_garbled() -> None:
     metadata_rows = [
         ArchiveMetadataEntry(
@@ -3697,7 +3146,7 @@ def test_question_fact_resolver_extracts_date_field_when_question_text_is_garble
 def test_question_fact_resolver_routes_missing_metadata_comparison_to_document_followup() -> None:
     resolver = QuestionFactResolver(
         repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(
+        file_repository=_StubArchiveMetadataFileRepository(
             [
                 {
                     "file_id": 101,
@@ -3748,56 +3197,10 @@ def test_question_fact_resolver_routes_missing_metadata_comparison_to_document_f
         in resolution.confidence_notes
     )
     assert "Archive metadata enriched the structured context for retrieval." in resolution.confidence_notes
-
-
-def test_question_fact_resolver_uses_aliases_for_compound_single_archive_metadata_question() -> None:
-    resolver = QuestionFactResolver(
-        repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(
-            [
-                {
-                    "file_id": 91,
-                    "archive_slug": "AI041_ID_49",
-                    "metadata_json": json.dumps(
-                        {
-                            "file": "AI041_ID_49",
-                            "fields": {
-                                "Nombre de Propietario Principal": "FILADELFIA DE LA PENA ECHAVEGUREN",
-                                "Nombre Beneficiario": "ATC SITIOS CHILE S.A.",
-                                "Forma de Pago": "Vale Vista",
-                                "Estado Contrato": "Vigente",
-                            },
-                        },
-                        ensure_ascii=False,
-                    ),
-                }
-            ]
-        ),
-    )
-
-    resolution = resolver.resolve(
-        question_class="metadata_comparison",
-        question=(
-            "Usando metadata del archivo AI041_ID_49 valida propietario principal, "
-            "beneficiario actual, forma de pago y si el contrato sigue vigente."
-        ),
-        user_id=7,
-        file_ids=[91],
-    )
-
-    assert resolution.narrowed_file_ids == [91]
-    assert resolution.answer_override is not None
-    assert "| Nombre de Propietario Principal | FILADELFIA DE LA PENA ECHAVEGUREN |" in resolution.answer_override
-    assert "| Nombre Beneficiario | ATC SITIOS CHILE S.A. |" in resolution.answer_override
-    assert "| Forma de Pago | Vale Vista |" in resolution.answer_override
-    assert "| Estado Contrato | Vigente |" in resolution.answer_override
-    assert resolution.facts_used_count == 4
-
-
 def test_question_fact_resolver_validates_multiple_expected_values_for_single_archive() -> None:
     resolver = QuestionFactResolver(
         repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(
+        file_repository=_StubArchiveMetadataFileRepository(
             [
                 {
                     "file_id": 91,
@@ -3838,7 +3241,7 @@ def test_question_fact_resolver_validates_multiple_expected_values_for_single_ar
 def test_question_fact_resolver_keeps_metadata_as_context_for_mixed_document_question() -> None:
     resolver = QuestionFactResolver(
         repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(
+        file_repository=_StubArchiveMetadataFileRepository(
             [
                 {
                     "file_id": 91,
@@ -3877,7 +3280,7 @@ def test_question_fact_resolver_keeps_metadata_as_context_for_mixed_document_que
 def test_question_fact_resolver_raises_when_metadata_is_requested_but_unavailable() -> None:
     resolver = QuestionFactResolver(
         repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository([]),
+        file_repository=_StubArchiveMetadataFileRepository([]),
     )
 
     with pytest.raises(ScopeResolutionError) as exc_info:
@@ -3896,7 +3299,7 @@ def test_question_fact_resolver_raises_when_metadata_is_requested_but_unavailabl
 def test_question_fact_resolver_raises_when_structured_metadata_field_is_unknown() -> None:
     resolver = QuestionFactResolver(
         repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(
+        file_repository=_StubArchiveMetadataFileRepository(
             [
                 {
                     "file_id": 91,
@@ -3932,7 +3335,7 @@ def test_question_fact_resolver_raises_when_structured_metadata_field_is_unknown
 def test_question_fact_resolver_uses_structured_metadata_fields_for_metadata_first_lookup() -> None:
     resolver = QuestionFactResolver(
         repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(
+        file_repository=_StubArchiveMetadataFileRepository(
             [
                 {
                     "file_id": 91,
@@ -3994,7 +3397,7 @@ def test_question_fact_resolver_uses_structured_metadata_fields_for_metadata_fir
 def test_question_fact_resolver_keeps_only_matching_archive_context_for_broad_manual_scope() -> None:
     resolver = QuestionFactResolver(
         repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(
+        file_repository=_StubArchiveMetadataFileRepository(
             [
                 {
                     "file_id": 91,
@@ -4047,7 +3450,7 @@ def test_question_fact_resolver_keeps_only_matching_archive_context_for_broad_ma
 def test_question_fact_resolver_expands_document_evidence_scope_to_all_matching_archive_files() -> None:
     resolver = QuestionFactResolver(
         repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(
+        file_repository=_StubArchiveMetadataFileRepository(
             [
                 {
                     "file_id": 91,
@@ -4164,295 +3567,6 @@ def test_question_fact_resolver_formats_single_field_listing_as_markdown_table()
         "| RM797_ID_1668 | 442 |"
     )
     assert "; " not in answer
-
-
-def test_question_fact_resolver_derives_monthly_equivalent_from_metadata() -> None:
-    resolver = QuestionFactResolver(
-        repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(
-            [
-                {
-                    "file_id": 401,
-                    "archive_slug": "AI041_ID_49",
-                    "metadata_json": json.dumps(
-                        {
-                            "file": "AI041_ID_49",
-                            "fields": {
-                                "Renta o Precio Vigente": "420",
-                                "Periodo de Pago": "Cada 4 años",
-                                "Tipo de Moneda": "UF",
-                            },
-                        },
-                        ensure_ascii=False,
-                    ),
-                }
-            ]
-        ),
-    )
-
-    resolution = resolver.resolve(
-        question_class="extractive",
-        question="Cual es el canon mensual equivalente del contrato vigente segun su periodicidad de pago?",
-        user_id=7,
-        file_ids=[401],
-        metadata_fields=["Renta o Precio Vigente", "Periodo de Pago", "Tipo de Moneda"],
-    )
-
-    assert resolution.answer_override is not None
-    assert "420 UF cada 4 años" in resolution.answer_override
-    assert "8,75 UF por mes" in resolution.answer_override
-
-
-def test_question_fact_resolver_derives_total_canon_for_initial_term_from_metadata() -> None:
-    resolver = QuestionFactResolver(
-        repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(
-            [
-                {
-                    "file_id": 402,
-                    "archive_slug": "FG459_ID_30575",
-                    "metadata_json": json.dumps(
-                        {
-                            "file": "FG459_ID_30575",
-                            "fields": {
-                                "Renta o Precio Vigente": "14",
-                                "Periodo de Pago": "Mensual",
-                                "Tipo de Moneda": "UF",
-                                "Duración Inicial del Contrato": "01A-06M-00D",
-                                "Fecha de Inicio de Vigencia del Contrato": "14/11/2024",
-                                "Fecha de Término del Contrato": "14/05/2026",
-                            },
-                        },
-                        ensure_ascii=False,
-                    ),
-                }
-            ]
-        ),
-    )
-
-    resolution = resolver.resolve(
-        question_class="extractive",
-        question="Cual es el total estimado de pagos por canon durante la vigencia inicial del contrato?",
-        user_id=7,
-        file_ids=[402],
-        metadata_fields=[
-            "Renta o Precio Vigente",
-            "Periodo de Pago",
-            "Duración Inicial del Contrato",
-            "Fecha de Inicio de Vigencia del Contrato",
-            "Fecha de Término del Contrato",
-        ],
-    )
-
-    assert resolution.answer_override is not None
-    assert "14 UF mensuales" in resolution.answer_override
-    assert "1 año y 6 meses" in resolution.answer_override
-    assert "252 UF" in resolution.answer_override
-
-
-def test_question_fact_resolver_derives_remaining_term_and_key_dates_from_metadata() -> None:
-    resolver = QuestionFactResolver(
-        repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(
-            [
-                {
-                    "file_id": 403,
-                    "archive_slug": "FG459_ID_30575",
-                    "metadata_json": json.dumps(
-                        {
-                            "file": "FG459_ID_30575",
-                            "fields": {
-                                "Fecha de Término del Contrato": "14/05/2026",
-                                "Fecha de Aviso de Término del Contrato": "14/04/2026",
-                                "Prórroga Automática": "NO",
-                                "Periodo Prórroga Automática": "01A-00M-00D",
-                            },
-                        },
-                        ensure_ascii=False,
-                    ),
-                }
-            ]
-        ),
-    )
-
-    resolution = resolver.resolve(
-        question_class="exhaustive_synthesis",
-        question="Cuanto tiempo resta para el vencimiento o renovacion del contrato y que hitos deben vigilarse?",
-        user_id=7,
-        file_ids=[403],
-        metadata_fields=[
-            "Fecha de Término del Contrato",
-            "Fecha de Aviso de Término del Contrato",
-            "Prórroga Automática",
-            "Periodo Prórroga Automática",
-        ],
-        reference_date=date(2026, 4, 25),
-    )
-
-    assert resolution.answer_override is not None
-    assert "19 dias" in resolution.answer_override
-    assert "14/05/2026" in resolution.answer_override
-    assert "14/04/2026" in resolution.answer_override
-    assert "Prórroga Automática: NO" in resolution.answer_override
-
-
-def test_question_fact_resolver_derives_contract_term_summary_from_metadata() -> None:
-    resolver = QuestionFactResolver(
-        repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(
-            [
-                {
-                    "file_id": 404,
-                    "archive_slug": "LA122_ID_3979",
-                    "metadata_json": json.dumps(
-                        {
-                            "file": "LA122_ID_3979",
-                            "fields": {
-                                "Fecha de Inicio de Vigencia del Contrato": "01/08/2025",
-                                "Fecha de TÃ©rmino del Contrato": "01/08/2027",
-                                "DuraciÃ³n Inicial del Contrato": "02A-00M-00D",
-                                "PrÃ³rroga AutomÃ¡tica": "SI",
-                                "Periodo PrÃ³rroga AutomÃ¡tica": "02A-00M-00D",
-                            },
-                        },
-                        ensure_ascii=False,
-                    ),
-                }
-            ]
-        ),
-    )
-
-    resolution = resolver.resolve(
-        question_class="extractive",
-        question="Cual es el plazo contractual vigente y cual es la fecha de termino del contrato?",
-        user_id=7,
-        file_ids=[404],
-        metadata_fields=[
-            "Fecha de Inicio de Vigencia del Contrato",
-            "Fecha de TÃ©rmino del Contrato",
-            "DuraciÃ³n Inicial del Contrato",
-            "PrÃ³rroga AutomÃ¡tica",
-            "Periodo PrÃ³rroga AutomÃ¡tica",
-        ],
-    )
-
-    assert resolution.answer_override is not None
-    assert "2 años" in resolution.answer_override
-    assert "01/08/2027" in resolution.answer_override
-    assert "Prórroga Automática: SI" in resolution.answer_override
-
-
-def test_question_fact_resolver_derives_next_renewal_window_from_metadata() -> None:
-    resolver = QuestionFactResolver(
-        repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(
-            [
-                {
-                    "file_id": 405,
-                    "archive_slug": "LA122_ID_3979",
-                    "metadata_json": json.dumps(
-                        {
-                            "file": "LA122_ID_3979",
-                            "fields": {
-                                "PrÃ³rroga AutomÃ¡tica": "SI",
-                                "Periodo PrÃ³rroga AutomÃ¡tica": "02A-00M-00D",
-                                "Fecha de TÃ©rmino del Contrato": "01/08/2027",
-                                "Fecha de Aviso de TÃ©rmino del Contrato": "01/02/2027",
-                            },
-                        },
-                        ensure_ascii=False,
-                    ),
-                }
-            ]
-        ),
-    )
-
-    resolution = resolver.resolve(
-        question_class="extractive",
-        question="Si existe prorroga automatica, cual seria el siguiente vencimiento o ventana de salida?",
-        user_id=7,
-        file_ids=[405],
-        metadata_fields=[
-            "PrÃ³rroga AutomÃ¡tica",
-            "Periodo PrÃ³rroga AutomÃ¡tica",
-            "Fecha de TÃ©rmino del Contrato",
-            "Fecha de Aviso de TÃ©rmino del Contrato",
-        ],
-    )
-
-    assert resolution.answer_override is not None
-    assert "01/08/2029" in resolution.answer_override
-    assert "2 años" in resolution.answer_override
-
-
-def test_question_fact_resolver_derives_multi_row_rent_change_summary_from_metadata() -> None:
-    resolver = QuestionFactResolver(
-        repository=object(),
-        file_repository=_FakeArchiveMetadataFileRepository(
-            [
-                {
-                    "file_id": 406,
-                    "archive_slug": "LA122_ID_18467",
-                    "metadata_json": json.dumps(
-                        {
-                            "file": "LA122_ID_18467",
-                            "fields": {
-                                "Codigo de Sitio": "LA122",
-                                "Estado Contrato": "Vencido",
-                                "Renta o Precio Vigente": "43.9",
-                                "Tipo de Moneda": "UF",
-                                "Periodo de Pago": "Mensual",
-                                "Fecha de TÃ©rmino del Contrato": "01/01/2022",
-                            },
-                        },
-                        ensure_ascii=False,
-                    ),
-                },
-                {
-                    "file_id": 407,
-                    "archive_slug": "LA122_ID_3979",
-                    "metadata_json": json.dumps(
-                        {
-                            "file": "LA122_ID_3979",
-                            "fields": {
-                                "Codigo de Sitio": "LA122",
-                                "Estado Contrato": "Vigente",
-                                "Renta o Precio Vigente": "504",
-                                "Tipo de Moneda": "UF",
-                                "Periodo de Pago": "Anual",
-                                "Fecha de TÃ©rmino del Contrato": "01/08/2027",
-                            },
-                        },
-                        ensure_ascii=False,
-                    ),
-                },
-            ]
-        ),
-    )
-
-    resolution = resolver.resolve(
-        question_class="metadata_comparison",
-        question=(
-            "Como cambian la renta, plazo y estado contractual entre contratos del mismo propietario, "
-            "beneficiario o codigo de sitio?"
-        ),
-        user_id=7,
-        file_ids=[406, 407],
-        metadata_fields=[
-            "Codigo de Sitio",
-            "Estado Contrato",
-            "Renta o Precio Vigente",
-            "Tipo de Moneda",
-            "Periodo de Pago",
-            "Fecha de TÃ©rmino del Contrato",
-        ],
-    )
-
-    assert resolution.answer_override is not None
-    assert "504 UF anuales" in resolution.answer_override
-    assert "43,9 UF mensuales" in resolution.answer_override
-
-
 def test_question_fact_resolver_marks_missing_metadata_in_multi_field_comparison() -> None:
     answer = QuestionFactResolver._build_metadata_answer(
         question=(
@@ -4550,7 +3664,7 @@ def test_metadata_upload_rejects_duplicate_files_case_insensitive(tmp_path: Path
 
 
 def test_metadata_upload_upload_csv_coerces_scalars_and_preserves_dynamic_fields(tmp_path: Path) -> None:
-    repository = _FakeMetadataRepository()
+    repository = _StubMetadataRepository()
     service = _build_metadata_upload_service(
         tmp_path=tmp_path,
         repository=repository,
@@ -4622,7 +3736,7 @@ def test_metadata_upload_upload_csv_coerces_scalars_and_preserves_dynamic_fields
 
 
 def test_metadata_upload_replace_csv_preserves_dataset_id_and_replaces_rows(tmp_path: Path) -> None:
-    repository = _FakeMetadataRepository()
+    repository = _StubMetadataRepository()
     service = _build_metadata_upload_service(
         tmp_path=tmp_path,
         repository=repository,
@@ -4664,7 +3778,7 @@ def test_archive_metadata_bootstrap_sql_files_exist() -> None:
 
 
 def test_archive_metadata_repository_file_lookup_does_not_use_distinct_with_clob() -> None:
-    class _FakeCursor:
+    class _StubCursor:
         def __init__(self) -> None:
             self.executed_sql = ""
 
@@ -4678,31 +3792,31 @@ def test_archive_metadata_repository_file_lookup_does_not_use_distinct_with_clob
         def close(self) -> None:
             return None
 
-    class _FakeConnection:
-        def __init__(self, cursor: _FakeCursor) -> None:
+    class _StubConnection:
+        def __init__(self, cursor: _StubCursor) -> None:
             self._cursor = cursor
 
-        def cursor(self) -> _FakeCursor:
+        def cursor(self) -> _StubCursor:
             return self._cursor
 
         def close(self) -> None:
             return None
 
-    fake_cursor = _FakeCursor()
+    stub_cursor = _StubCursor()
     repository = object.__new__(ArchiveMetadataRepository)
     repository.db_manager = type(
-        "_FakeDbManager",
+        "_StubDbManager",
         (),
-        {"get_connection": lambda self: _FakeConnection(fake_cursor)},
+        {"get_connection": lambda self: _StubConnection(stub_cursor)},
     )()
     rows = repository.get_archive_metadata_for_file_ids(user_id=7, file_ids=[101])
 
     assert rows == []
-    assert "SELECT DISTINCT" not in _normalize_sql_whitespace(fake_cursor.executed_sql).upper()
+    assert "SELECT DISTINCT" not in _normalize_sql_whitespace(stub_cursor.executed_sql).upper()
 
 
 def test_archive_metadata_repository_user_lookup_does_not_group_by_metadata_clob() -> None:
-    class _FakeCursor:
+    class _StubCursor:
         def __init__(self) -> None:
             self.executed_sql = ""
 
@@ -4716,27 +3830,27 @@ def test_archive_metadata_repository_user_lookup_does_not_group_by_metadata_clob
         def close(self) -> None:
             return None
 
-    class _FakeConnection:
-        def __init__(self, cursor: _FakeCursor) -> None:
+    class _StubConnection:
+        def __init__(self, cursor: _StubCursor) -> None:
             self._cursor = cursor
 
-        def cursor(self) -> _FakeCursor:
+        def cursor(self) -> _StubCursor:
             return self._cursor
 
         def close(self) -> None:
             return None
 
-    fake_cursor = _FakeCursor()
+    stub_cursor = _StubCursor()
     repository = object.__new__(ArchiveMetadataRepository)
     repository.db_manager = type(
-        "_FakeDbManager",
+        "_StubDbManager",
         (),
-        {"get_connection": lambda self: _FakeConnection(fake_cursor)},
+        {"get_connection": lambda self: _StubConnection(stub_cursor)},
     )()
 
     rows = repository.list_archive_metadata_for_user(user_id=7, include_shared=True)
 
-    normalized_sql = _normalize_sql_whitespace(fake_cursor.executed_sql).upper()
+    normalized_sql = _normalize_sql_whitespace(stub_cursor.executed_sql).upper()
     group_by_fragment = normalized_sql.split("GROUP BY", 1)[1]
     assert rows == []
     assert "AM.METADATA_JSON" not in group_by_fragment
@@ -4744,7 +3858,7 @@ def test_archive_metadata_repository_user_lookup_does_not_group_by_metadata_clob
 
 
 def test_archive_metadata_repository_lists_shared_metadata_uploads_against_visible_files() -> None:
-    class _FakeCursor:
+    class _StubCursor:
         def __init__(self) -> None:
             self.executed_sql = ""
             self.params: dict | None = None
@@ -4760,29 +3874,29 @@ def test_archive_metadata_repository_lists_shared_metadata_uploads_against_visib
         def close(self) -> None:
             return None
 
-    class _FakeConnection:
-        def __init__(self, cursor: _FakeCursor) -> None:
+    class _StubConnection:
+        def __init__(self, cursor: _StubCursor) -> None:
             self._cursor = cursor
 
-        def cursor(self) -> _FakeCursor:
+        def cursor(self) -> _StubCursor:
             return self._cursor
 
         def close(self) -> None:
             return None
 
-    fake_cursor = _FakeCursor()
+    stub_cursor = _StubCursor()
     repository = object.__new__(ArchiveMetadataRepository)
     repository.db_manager = type(
-        "_FakeDbManager",
+        "_StubDbManager",
         (),
-        {"get_connection": lambda self: _FakeConnection(fake_cursor)},
+        {"get_connection": lambda self: _StubConnection(stub_cursor)},
     )()
 
     rows = repository.list_uploads_for_user(user_id=11, include_archived=False, include_shared=True)
 
-    normalized_sql = _normalize_sql_whitespace(fake_cursor.executed_sql).upper()
+    normalized_sql = _normalize_sql_whitespace(stub_cursor.executed_sql).upper()
     assert rows == []
-    assert fake_cursor.params == {"user_id": 11}
+    assert stub_cursor.params == {"user_id": 11}
     assert "U.ACCESS_SCOPE" in normalized_sql
     assert "LOWER(NVL(U.ACCESS_SCOPE, 'PRIVATE')) = 'ALL'" in normalized_sql
     assert "LOWER(NVL(F.ACCESS_SCOPE, 'PRIVATE')) = 'ALL'" in normalized_sql
@@ -4790,7 +3904,7 @@ def test_archive_metadata_repository_lists_shared_metadata_uploads_against_visib
 
 
 def test_archive_metadata_repository_get_upload_row_can_read_shared_dataset_rows() -> None:
-    class _FakeCursor:
+    class _StubCursor:
         def __init__(self) -> None:
             self.executed_sql = ""
 
@@ -4804,27 +3918,27 @@ def test_archive_metadata_repository_get_upload_row_can_read_shared_dataset_rows
         def close(self) -> None:
             return None
 
-    class _FakeConnection:
-        def __init__(self, cursor: _FakeCursor) -> None:
+    class _StubConnection:
+        def __init__(self, cursor: _StubCursor) -> None:
             self._cursor = cursor
 
-        def cursor(self) -> _FakeCursor:
+        def cursor(self) -> _StubCursor:
             return self._cursor
 
         def close(self) -> None:
             return None
 
-    fake_cursor = _FakeCursor()
+    stub_cursor = _StubCursor()
     repository = object.__new__(ArchiveMetadataRepository)
     repository.db_manager = type(
-        "_FakeDbManager",
+        "_StubDbManager",
         (),
-        {"get_connection": lambda self: _FakeConnection(fake_cursor)},
+        {"get_connection": lambda self: _StubConnection(stub_cursor)},
     )()
 
     row = repository.get_upload_row(metadata_upload_id="meta-1", user_id=22, file_key="LA122")
 
-    normalized_sql = _normalize_sql_whitespace(fake_cursor.executed_sql).upper()
+    normalized_sql = _normalize_sql_whitespace(stub_cursor.executed_sql).upper()
     assert row is None
     assert "JOIN ARCHIVE_METADATA_UPLOADS U" in normalized_sql
     assert "LOWER(NVL(U.ACCESS_SCOPE, 'PRIVATE')) = 'ALL'" in normalized_sql
@@ -4832,7 +3946,7 @@ def test_archive_metadata_repository_get_upload_row_can_read_shared_dataset_rows
 
 
 def test_archive_metadata_repository_retries_update_after_unique_constraint_race(monkeypatch: pytest.MonkeyPatch) -> None:
-    class _FakeCursor:
+    class _StubCursor:
         def __init__(self) -> None:
             self.executed_sql: list[str] = []
             self.rowcount = 0
@@ -4851,13 +3965,13 @@ def test_archive_metadata_repository_retries_update_after_unique_constraint_race
         def close(self) -> None:
             return None
 
-    class _FakeConnection:
+    class _StubConnection:
         def __init__(self) -> None:
             self.rollback_calls = 0
             self.commit_calls = 0
 
-        def cursor(self) -> _FakeCursor:
-            return fake_cursor
+        def cursor(self) -> _StubCursor:
+            return stub_cursor
 
         def rollback(self) -> None:
             self.rollback_calls += 1
@@ -4868,12 +3982,12 @@ def test_archive_metadata_repository_retries_update_after_unique_constraint_race
         def close(self) -> None:
             return None
 
-    fake_cursor = _FakeCursor()
-    fake_connections: list[_FakeConnection] = []
+    stub_cursor = _StubCursor()
+    stub_connections: list[_StubConnection] = []
 
     def _get_connection():
-        connection = _FakeConnection()
-        fake_connections.append(connection)
+        connection = _StubConnection()
+        stub_connections.append(connection)
         return connection
 
     import apps.backend.app.repositories.archive_metadata_repository as archive_metadata_module
@@ -4885,7 +3999,7 @@ def test_archive_metadata_repository_retries_update_after_unique_constraint_race
     )
 
     repository = object.__new__(ArchiveMetadataRepository)
-    repository.db_manager = type("_FakeDbManager", (), {"get_connection": staticmethod(_get_connection)})()
+    repository.db_manager = type("_StubDbManager", (), {"get_connection": staticmethod(_get_connection)})()
     repository.upsert_archive_metadata(
         user_id=7,
         archive_slug="AI041_ID_49",
@@ -4894,16 +4008,16 @@ def test_archive_metadata_repository_retries_update_after_unique_constraint_race
         metadata_search_text="file ai041 id 49",
     )
 
-    assert len(fake_connections) == 2
-    assert fake_connections[0].rollback_calls == 1
-    assert fake_connections[0].commit_calls == 0
-    assert fake_connections[1].commit_calls == 1
-    assert any(sql.startswith("MERGE INTO ARCHIVE_METADATA") for sql in fake_cursor.executed_sql)
-    assert any(sql.startswith("UPDATE ARCHIVE_METADATA") for sql in fake_cursor.executed_sql)
+    assert len(stub_connections) == 2
+    assert stub_connections[0].rollback_calls == 1
+    assert stub_connections[0].commit_calls == 0
+    assert stub_connections[1].commit_calls == 1
+    assert any(sql.startswith("MERGE INTO ARCHIVE_METADATA") for sql in stub_cursor.executed_sql)
+    assert any(sql.startswith("UPDATE ARCHIVE_METADATA") for sql in stub_cursor.executed_sql)
 
 
 def test_retrieval_metadata_prefilter_keeps_limit_sized_matches() -> None:
-    class _FakeRepository:
+    class _StubRepository:
         def search_file_ids_by_metadata_query(
             self,
             *,
@@ -4917,7 +4031,7 @@ def test_retrieval_metadata_prefilter_keeps_limit_sized_matches() -> None:
             return list(range(1, 21))
 
     service = object.__new__(RetrievalPipelineService)
-    service.repository = _FakeRepository()
+    service.repository = _StubRepository()
 
     matches = service._metadata_prefilter_file_ids(
         question="region metropolitana de santiago",
@@ -4929,13 +4043,142 @@ def test_retrieval_metadata_prefilter_keeps_limit_sized_matches() -> None:
     assert matches == list(range(1, 21))
 
 
+def test_query_concept_coverage_matches_inflected_document_terms() -> None:
+    concepts = extract_query_concepts("que documentos hablan sobre atraso de renta?")
+
+    assert concepts == ["atraso", "renta"]
+    assert concept_coverage_score(
+        concepts,
+        tokenize_text("Si Entel se atrasa o no paga la renta, procede el maximo interes legal."),
+    ) == 1.0
+
+
+def test_query_concept_coverage_uses_generic_near_token_relation() -> None:
+    assert token_keys_are_related("aprobacion", "reaprobacion") is True
+    assert token_keys_are_related("atraso", "retraso") is True
+    assert token_keys_are_related("fecha", "ficha") is False
+    assert concept_coverage_score(
+        ["aprobacion"],
+        tokenize_text("El documento contiene la reaprobacion operativa del proceso."),
+    ) == 1.0
+
+
+def test_retrieval_metadata_prefilter_uses_real_metadata_concepts_when_text_index_has_no_hits() -> None:
+    class _StubRepository:
+        def search_file_ids_by_metadata_query(
+            self,
+            *,
+            user_id: int,
+            query_text: str,
+            file_ids: list[int] | None = None,
+            limit: int = 20,
+            include_shared: bool = False,
+        ) -> list[int]:
+            del user_id, query_text, file_ids, limit, include_shared
+            return []
+
+        def list_archive_metadata_for_user(
+            self,
+            *,
+            user_id: int,
+            include_shared: bool = False,
+        ) -> list[dict[str, object]]:
+            del user_id, include_shared
+            return [
+                {
+                    "file_id": 44,
+                    "archive_slug": "LA382_ID_1142",
+                    "metadata_search_text": (
+                        "Indicar Otras Condiciones: Si Entel se atrasa o no paga la renta, "
+                        "el arrendador tendra derecho a cobrar interes legal."
+                    ),
+                    "metadata_json": "{}",
+                },
+                {
+                    "file_id": 69,
+                    "archive_slug": "TSM10_ID_20441",
+                    "metadata_search_text": "Renta o Precio Vigente: 300 UF",
+                    "metadata_json": "{}",
+                },
+            ]
+
+        def list_file_ids_for_archive_slugs(
+            self,
+            *,
+            user_id: int,
+            archive_slugs: list[str],
+            include_shared: bool = False,
+        ) -> list[int]:
+            del user_id, include_shared
+            if archive_slugs == ["LA382_ID_1142"]:
+                return [44, 45, 46, 47]
+            return []
+
+        def get_archive_slug_map_for_file_ids(
+            self,
+            *,
+            user_id: int,
+            file_ids: list[int],
+            include_shared: bool = False,
+        ) -> dict[int, str]:
+            del user_id, include_shared
+            return {int(file_id): "LA382_ID_1142" for file_id in file_ids}
+
+    service = object.__new__(RetrievalPipelineService)
+    service.repository = _StubRepository()
+
+    matches = service._metadata_prefilter_file_ids(
+        question="que documentos hablan sobre atraso de renta?",
+        user_id=7,
+        file_ids=None,
+        limit=20,
+    )
+
+    assert matches == [44, 45, 46, 47]
+
+
+def test_document_shortlist_keeps_metadata_priority_without_excluding_textual_matches() -> None:
+    service = object.__new__(RetrievalPipelineService)
+
+    def _dense_candidates(self, **kwargs):
+        del self, kwargs
+        return []
+
+    def _lexical_candidates(self, **kwargs):
+        del self, kwargs
+        return [
+            {
+                "file_id": 99,
+                "file_input_file_name": "textual-match.pdf",
+                "file_code": "TX99",
+                "file_embeddings_summary": "retardo o atraso de renta",
+                "file_embeddings_search_text": "retardo o atraso de renta",
+                "lexical_score": 3,
+            }
+        ]
+
+    service._retrieve_document_dense_candidates = MethodType(_dense_candidates, service)
+    service._retrieve_document_lexical_candidates = MethodType(_lexical_candidates, service)
+
+    shortlisted = service._shortlist_documents(
+        question="que documentos hablan sobre atraso de renta?",
+        query_vector=[0.1, 0.2],
+        user_id=7,
+        file_ids=None,
+        priority_file_ids=[44],
+        shortlist_limit=3,
+    )
+
+    assert shortlisted == [44, 99]
+
+
 def test_retrieval_explicit_archive_scope_is_not_narrowed_by_metadata_prefilter() -> None:
-    class _FakeEmbeddingService:
+    class _StubEmbeddingService:
         def embed_query_text(self, *, text: str) -> list[float]:
             del text
             return [0.0, 0.1]
 
-    class _FakeRepository:
+    class _StubRepository:
         def search_file_ids_by_metadata_query(
             self,
             *,
@@ -5003,7 +4246,7 @@ def test_retrieval_explicit_archive_scope_is_not_narrowed_by_metadata_prefilter(
             del file_ids, user_id, include_vectors, modalities, include_shared
             return []
 
-    class _FakeVectorStore:
+    class _StubVectorStore:
         def similarity_search(
             self,
             *,
@@ -5037,9 +4280,9 @@ def test_retrieval_explicit_archive_scope_is_not_narrowed_by_metadata_prefilter(
             ]
 
     service = object.__new__(RetrievalPipelineService)
-    service.embedding_service = _FakeEmbeddingService()
-    service.repository = _FakeRepository()
-    service.oracle_vector_store = _FakeVectorStore()
+    service.embedding_service = _StubEmbeddingService()
+    service.repository = _StubRepository()
+    service.oracle_vector_store = _StubVectorStore()
     service.rerank_service = object()
     service.settings = Settings(_env_file=None)
 
@@ -5062,12 +4305,12 @@ def test_retrieval_explicit_archive_scope_is_not_narrowed_by_metadata_prefilter(
 
 
 def test_retrieval_explicit_pdf_full_document_request_keeps_all_pages_in_order() -> None:
-    class _FakeEmbeddingService:
+    class _StubEmbeddingService:
         def embed_query_text(self, *, text: str) -> list[float]:
             del text
             return [0.0, 0.1]
 
-    class _FakeRepository:
+    class _StubRepository:
         def search_file_ids_by_metadata_query(
             self,
             *,
@@ -5157,7 +4400,7 @@ def test_retrieval_explicit_pdf_full_document_request_keeps_all_pages_in_order()
                 for page_number in range(1, 7)
             ]
 
-    class _FakeVectorStore:
+    class _StubVectorStore:
         def similarity_search(
             self,
             *,
@@ -5190,9 +4433,9 @@ def test_retrieval_explicit_pdf_full_document_request_keeps_all_pages_in_order()
             ]
 
     service = object.__new__(RetrievalPipelineService)
-    service.embedding_service = _FakeEmbeddingService()
-    service.repository = _FakeRepository()
-    service.oracle_vector_store = _FakeVectorStore()
+    service.embedding_service = _StubEmbeddingService()
+    service.repository = _StubRepository()
+    service.oracle_vector_store = _StubVectorStore()
     service.rerank_service = object()
     service.settings = Settings(_env_file=None)
 
@@ -5254,8 +4497,8 @@ def test_representative_questions_request_extra_page_coverage() -> None:
     assert not question_requests_representative_details("Que documentos integran el expediente?")
 
 
-def test_per_doc_fallback_keeps_multiple_pages_per_document_for_quota() -> None:
-    class _FakeRepository:
+def test_per_doc_default_value_keeps_multiple_pages_per_document_for_quota() -> None:
+    class _StubRepository:
         def list_embeddings(
             self,
             *,
@@ -5299,9 +4542,9 @@ def test_per_doc_fallback_keeps_multiple_pages_per_document_for_quota() -> None:
             return rows
 
     service = object.__new__(RetrievalPipelineService)
-    service.repository = _FakeRepository()
+    service.repository = _StubRepository()
 
-    candidates = service._build_per_doc_fallback_candidates(
+    candidates = service._build_per_doc_evidence_expansion_candidates(
         question="Que personas o representantes aparecen con facultades para firmar?",
         user_id=7,
         selected_file_ids=[501],
@@ -5353,7 +4596,7 @@ def test_representative_excerpt_stitches_people_names_across_pages() -> None:
 
 
 def test_retrieval_builds_adjacent_pages_for_representative_boundary_context() -> None:
-    class _FakeRepository:
+    class _StubRepository:
         def list_embeddings(
             self,
             *,
@@ -5399,7 +4642,7 @@ def test_retrieval_builds_adjacent_pages_for_representative_boundary_context() -
             return rows
 
     service = object.__new__(RetrievalPipelineService)
-    service.repository = _FakeRepository()
+    service.repository = _StubRepository()
     selected = [
         EvidenceItem(
             source_number=1,
@@ -5470,7 +4713,7 @@ def test_final_evidence_quota_preserves_multiple_pages_per_document_when_trimmin
 
 
 def test_archive_metadata_context_prioritizes_dynamic_fields_before_context_cutoff() -> None:
-    class _FakeRepository:
+    class _StubRepository:
         def get_archive_metadata_for_file_ids(
             self,
             *,
@@ -5496,7 +4739,7 @@ def test_archive_metadata_context_prioritizes_dynamic_fields_before_context_cuto
                 }
             ]
 
-    resolver = QuestionFactResolver(repository=object(), file_repository=_FakeRepository())
+    resolver = QuestionFactResolver(repository=object(), file_repository=_StubRepository())
 
     context = resolver._build_archive_metadata_context(user_id=7, file_ids=[501])
 
@@ -5666,7 +4909,7 @@ def test_metadata_workbook_normalization_reorders_existing_file_column(
         normalize_metadata_workbook_to_csv.__globals__,
         "_read_xls_sheet",
         lambda source_path, sheet_name=None: LoadedWorkbookSheet(
-            sheet_name="Legacy",
+            sheet_name="Retired",
             headers=["Id", "File", "Region"],
             rows=[
                 {"Id": "49", "File": "AI041_ID_49.zip", "Region": "Norte"},
@@ -5756,11 +4999,11 @@ def test_nomic_provider_uses_document_and_query_prefixes() -> None:
     provider = object.__new__(NomicLocalMultimodalProvider)
     calls: list[tuple[str, str]] = []
 
-    def _fake_embed_prefixed_text(self, *, text: str, prefix: str) -> list[float]:
+    def _stub_embed_prefixed_text(self, *, text: str, prefix: str) -> list[float]:
         calls.append((prefix, text))
         return [float(len(calls))]
 
-    provider._embed_prefixed_text = MethodType(_fake_embed_prefixed_text, provider)
+    provider._embed_prefixed_text = MethodType(_stub_embed_prefixed_text, provider)
 
     assert provider.embed_document_text(text="documento") == [1.0]
     assert provider.embed_query_text(text="consulta") == [2.0]
@@ -5771,7 +5014,7 @@ def test_nomic_provider_uses_document_and_query_prefixes() -> None:
 
 
 def test_embedding_service_routes_document_and_query_embeddings(monkeypatch: pytest.MonkeyPatch) -> None:
-    class _FakeProvider:
+    class _StubProvider:
         def __init__(self) -> None:
             self.calls: list[tuple[str, str]] = []
 
@@ -5786,17 +5029,17 @@ def test_embedding_service_routes_document_and_query_embeddings(monkeypatch: pyt
         def embed_image(self, *, image_path: Path, context_text: str = "") -> tuple[list[float], str]:
             raise AssertionError("image embeddings are not part of this unit test")
 
-    fake_provider = _FakeProvider()
+    stub_provider = _StubProvider()
     monkeypatch.setattr(
         "apps.backend.app.rag.embedding_service.get_nomic_local_provider",
-        lambda: fake_provider,
+        lambda: stub_provider,
     )
     service = EmbeddingService(_build_settings())
 
     assert service.embed_document_text(text="archivo") == [1.0]
     assert service.embed_query_text(text="pregunta") == [2.0]
     assert service.embed_text(text="otra pregunta", input_type="query") == [2.0]
-    assert fake_provider.calls == [
+    assert stub_provider.calls == [
         ("document", "archivo"),
         ("query", "pregunta"),
         ("query", "otra pregunta"),

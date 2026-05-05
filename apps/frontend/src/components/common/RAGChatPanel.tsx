@@ -28,6 +28,7 @@ import {
 import { queryKeys } from '../../lib/queryClient';
 import {
   chatApi,
+  improvementApi,
   ragApi,
   settingsApi,
   type ChatRequestOptions,
@@ -70,9 +71,7 @@ type Message = {
   timestamp: Date;
   localOnly?: boolean;
   modelUsed?: string;
-  sources?: Source[];
   citedSources?: Source[];
-  retrievedSources?: Source[];
   error?: string;
   reasoning?: ReasoningResult;
   telemetry?: Record<string, any>;
@@ -118,6 +117,9 @@ const DEFAULT_GRAPH_DEFINITION: GraphDefinition = {
     { key: 'classify_intent', label: 'Classify intent', kind: 'decision' },
     { key: 'search_response', label: 'Search response', kind: 'terminal_branch' },
     { key: 'resolve_scope', label: 'Resolve scope', kind: 'decision' },
+    { key: 'classify_question', label: 'Classify question', kind: 'decision' },
+    { key: 'resolve_facts', label: 'Resolve facts', kind: 'decision' },
+    { key: 'decide_answerability', label: 'Decide answerability', kind: 'decision' },
     { key: 'retrieve_candidates', label: 'Retrieve candidates', kind: 'retrieval' },
     { key: 'fuse_page_evidence', label: 'Fuse page evidence', kind: 'merge' },
     { key: 'maybe_verify_visual', label: 'Maybe verify visual', kind: 'multimodal' },
@@ -129,7 +131,11 @@ const DEFAULT_GRAPH_DEFINITION: GraphDefinition = {
     { source: 'classify_intent', target: 'search_response', condition: 'route=search' },
     { source: 'classify_intent', target: 'resolve_scope', condition: 'route=document' },
     { source: 'search_response', target: 'persist_turn', condition: '' },
-    { source: 'resolve_scope', target: 'retrieve_candidates', condition: '' },
+    { source: 'resolve_scope', target: 'classify_question', condition: '' },
+    { source: 'classify_question', target: 'resolve_facts', condition: '' },
+    { source: 'resolve_facts', target: 'decide_answerability', condition: '' },
+    { source: 'decide_answerability', target: 'retrieve_candidates', condition: 'answerability_route!=metadata' },
+    { source: 'decide_answerability', target: 'synthesize_document_answer', condition: 'answerability_route=metadata' },
     { source: 'retrieve_candidates', target: 'fuse_page_evidence', condition: '' },
     { source: 'fuse_page_evidence', target: 'maybe_verify_visual', condition: '' },
     { source: 'maybe_verify_visual', target: 'synthesize_document_answer', condition: '' },
@@ -271,21 +277,32 @@ function shouldUsePerDocumentSummary(question: string, archiveSlugs: string[]): 
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase();
   return [
-    'lista los nombres exactos',
-    'pdf relevantes',
-    'evidencia documental',
-    'documentos integran',
-    'integran el expediente',
-    'documento base',
-    'contrato base',
-    'instrumento vigente',
-    'de donde fue extraido',
-    'dato clave',
-    'datos clave',
-    'representante',
-    'representantes',
-    'facultades para firmar',
-    'clausulas equivalentes',
+    'por documento',
+    'por archivo',
+    'cada documento',
+    'cada archivo',
+    'separa por',
+    'agrupa por',
+    'compara',
+    'comparar',
+    'diferencia',
+    'diferencias',
+    'similitud',
+    'similitudes',
+    'evidencia',
+    'cita',
+    'citas',
+    'fuente',
+    'fuentes',
+    'pagina',
+    'paginas',
+    'page',
+    'pages',
+    'documentos relevantes',
+    'archivos relevantes',
+    'which documents',
+    'what documents',
+    'relevant documents',
   ].some((term) => normalized.includes(term));
 }
 
@@ -1083,6 +1100,13 @@ function extractDocumentPageMarkdown(markdown: string, pageNumber: number): stri
   return '';
 }
 
+function cleanPageMarkdownForPreview(markdown: string): string {
+  return String(markdown || '')
+    .replace(/<\s*!?-{2,}\s*images?\s*-{2,}\s*>/gi, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function buildSourceHighlightTerms(snippet: string): string[] {
   const text = String(snippet || '')
     .replace(/\s+/g, ' ')
@@ -1362,53 +1386,8 @@ function mapSourcesByMetadataKey(metadata: Record<string, any>, key: string): So
   return mapSourcesFromArray(sourceItems);
 }
 
-function mapCitedSourcesFromMetadata(metadata: Record<string, any>, fallbackSources: Source[]): Source[] {
-  const explicitCitedSources = mapSourcesByMetadataKey(metadata, 'cited_sources');
-  if (explicitCitedSources.length > 0) return explicitCitedSources;
-
-  const selectedCitationNumbers = Array.isArray(metadata?.selected_citations)
-    ? new Set(
-        metadata.selected_citations
-          .map((value: unknown) => Number(value))
-          .filter((value: number) => Number.isFinite(value) && value > 0)
-      )
-    : new Set<number>();
-  if (selectedCitationNumbers.size === 0) return [];
-  return fallbackSources.filter((source) => {
-    const sourceNumber = Number(source.source_number ?? source.doc_id ?? 0);
-    return Number.isFinite(sourceNumber) && selectedCitationNumbers.has(sourceNumber);
-  });
-}
-
-function mapSourcesFromMetadata(metadata: Record<string, any>): Source[] {
-  const serializedSources = (
-    Array.isArray(metadata?.sources)
-      ? (metadata.sources as Array<Record<string, any>>)
-      : Array.isArray(metadata?.cited_sources)
-      ? (metadata.cited_sources as Array<Record<string, any>>)
-      : Array.isArray(metadata?.retrieved_sources)
-      ? (metadata.retrieved_sources as Array<Record<string, any>>)
-      : []
-  );
-  if (serializedSources.length > 0) {
-    return mapSourcesFromArray(serializedSources);
-  }
-
-  const analyzedPages = Array.isArray(metadata?.analyzed_pages) ? metadata.analyzed_pages : [];
-  if (analyzedPages.length === 0) return [];
-  const scopeFileId = Number(metadata?.scope_file_id ?? 0) || undefined;
-  return analyzedPages.map((page: number, index: number) => {
-    const pageNumber = Number(page);
-    const normalizedPage = Number.isFinite(pageNumber) && pageNumber > 0 ? pageNumber : undefined;
-    return {
-      doc_id: String(index + 1),
-      name: `page ${normalizedPage ?? "?"}`,
-      source_number: index + 1,
-      file_id: scopeFileId,
-      page_number: normalizedPage,
-      object_name_page: "",
-    };
-  });
+function mapCitedSourcesFromMetadata(metadata: Record<string, any>): Source[] {
+  return mapSourcesByMetadataKey(metadata, 'cited_sources');
 }
 
 function mapReasoningFromMetadata(metadata: Record<string, any>): ReasoningResult | undefined {
@@ -2134,18 +2113,14 @@ export function RAGChatPanel() {
         const response = await chatApi.getMessages(activeConversationId);
         const loaded = (response.data?.messages || []).map((item: any) => {
           const metadata = item.retrieval_metadata || {};
-          const sources = mapSourcesFromMetadata(metadata);
-          const citedSources = mapCitedSourcesFromMetadata(metadata, sources);
-          const retrievedSources = mapSourcesByMetadataKey(metadata, 'retrieved_sources');
+          const citedSources = mapCitedSourcesFromMetadata(metadata);
           return {
             messageId: String(item.message_id),
             role: item.role === 'user' ? 'user' : 'assistant',
             text: stripInlineSourcesSection(String(item.content || '')),
             timestamp: new Date(item.created_at),
             modelUsed: String(item.model_used || ''),
-            sources,
             citedSources,
-            retrievedSources: retrievedSources.length > 0 ? retrievedSources : sources,
             reasoning: mapReasoningFromMetadata(metadata),
             telemetry: metadata,
           };
@@ -2434,17 +2409,13 @@ export function RAGChatPanel() {
       const data = res.data as {
         success?: boolean;
         reply?: string;
-        sources?: Source[];
         citedSources?: Source[];
-        retrievedSources?: Source[];
         model_used?: string;
         reasoning?: ReasoningResult;
         telemetry?: Record<string, any>;
       };
       const reply = data?.reply ?? '';
-      const sources = data?.sources ?? [];
       const citedSources = data?.citedSources ?? [];
-      const retrievedSources = data?.retrievedSources ?? sources;
       setMessages((prev) => [
         ...prev,
         {
@@ -2453,9 +2424,7 @@ export function RAGChatPanel() {
           text: stripInlineSourcesSection(reply || 'No response received.'),
           timestamp: new Date(),
           modelUsed: data?.model_used || '',
-          sources,
           citedSources,
-          retrievedSources,
           reasoning: data?.reasoning,
           telemetry: data?.telemetry,
         },
@@ -2805,7 +2774,7 @@ export function RAGChatPanel() {
 
     if (markdownResult.status === 'fulfilled') {
       const markdown = String(markdownResult.value?.data?.markdown ?? '');
-      const pageMarkdown = extractDocumentPageMarkdown(markdown, source.page_number);
+      const pageMarkdown = cleanPageMarkdownForPreview(extractDocumentPageMarkdown(markdown, source.page_number));
       setSourcePreviewMarkdown(pageMarkdown || '_No Markdown content found for this page._');
     } else {
       const error = markdownResult.reason as any;
@@ -2839,17 +2808,19 @@ export function RAGChatPanel() {
     []
   );
 
-  const persistFeedbackEvent = (payload: Record<string, any>) => {
-    try {
-      const storageKey = 'rag-chat-feedback-events';
-      const existingRaw = localStorage.getItem(storageKey);
-      const existing = existingRaw ? JSON.parse(existingRaw) : [];
-      const normalizedExisting = Array.isArray(existing) ? existing : [];
-      const next = [payload, ...normalizedExisting].slice(0, 300);
-      localStorage.setItem(storageKey, JSON.stringify(next));
-    } catch {
-      // no-op: feedback UI should still work without localStorage
-    }
+  const recordFeedbackEvent = (payload: Record<string, any>) => {
+    void improvementApi
+      .recordFeedback({
+        event_type: String(payload.type || payload.event_type || ''),
+        value: String(payload.value || ''),
+        conversation_id: payload.conversation_id ?? null,
+        trace_id: String(payload.trace_id || '').trim() || null,
+        assistant_message_id: String(payload.assistant_message_id || ''),
+        user_prompt: String(payload.user_prompt || ''),
+        assistant_answer: String(payload.assistant_answer || ''),
+        metadata: payload.metadata && typeof payload.metadata === 'object' ? payload.metadata : {},
+      })
+      .catch(() => undefined);
   };
 
   const resolveRelatedUserPrompt = (assistantIndex: number): string => {
@@ -2874,14 +2845,18 @@ export function RAGChatPanel() {
       }
       return next;
     });
-    persistFeedbackEvent({
+    recordFeedbackEvent({
       type: 'answer_feedback',
       value: alreadySelected ? 'cleared' : kind,
       conversation_id: activeConversationId ?? null,
+      trace_id: String(message.telemetry?.trace_id || ''),
       assistant_message_id: message.messageId,
       user_prompt: userPrompt,
       assistant_answer: message.text,
-      created_at: new Date().toISOString(),
+      metadata: {
+        answerability_route: String(message.telemetry?.answerability_route || ''),
+        cited_sources_count: Number(message.telemetry?.cited_sources_count || 0),
+      },
     });
   };
 
@@ -2898,13 +2873,18 @@ export function RAGChatPanel() {
         setCopiedMessageId(null);
         copiedTimeoutRef.current = null;
       }, 1400);
-      persistFeedbackEvent({
+      recordFeedbackEvent({
         type: 'answer_copy',
+        value: 'copied',
         conversation_id: activeConversationId ?? null,
+        trace_id: String(message.telemetry?.trace_id || ''),
         assistant_message_id: message.messageId,
         user_prompt: userPrompt,
         assistant_answer: message.text,
-        created_at: new Date().toISOString(),
+        metadata: {
+          answerability_route: String(message.telemetry?.answerability_route || ''),
+          cited_sources_count: Number(message.telemetry?.cited_sources_count || 0),
+        },
       });
     } catch {
       // Clipboard may be unavailable in restricted contexts.
@@ -3197,12 +3177,7 @@ export function RAGChatPanel() {
                         {m.role === 'assistant' &&
                           (() => {
                             const citedSources = m.citedSources && m.citedSources.length > 0 ? m.citedSources : [];
-                            const rawRetrievedSources =
-                              m.retrievedSources && m.retrievedSources.length > 0
-                                ? m.retrievedSources
-                                : m.sources || [];
-                            const fallbackSources = citedSources.length === 0 ? rawRetrievedSources : [];
-                            if (citedSources.length === 0 && fallbackSources.length === 0) return null;
+                            if (citedSources.length === 0) return null;
 
                             const renderSourceChip = (s: Source, index: number, keyPrefix: string) => {
                               const previewTarget = resolveSourcePreviewTarget(s);
@@ -3248,16 +3223,6 @@ export function RAGChatPanel() {
                                     </p>
                                     <div className="flex flex-wrap gap-1.5">
                                       {citedSources.map((s, index) => renderSourceChip(s, index, 'cited'))}
-                                    </div>
-                                  </div>
-                                )}
-                                {fallbackSources.length > 0 && (
-                                  <div>
-                                    <p className="text-[10px] font-semibold text-oracle-light-gray uppercase tracking-wide mb-1.5">
-                                      Sources
-                                    </p>
-                                    <div className="flex flex-wrap gap-1.5">
-                                      {fallbackSources.map((s, index) => renderSourceChip(s, index, 'fallback'))}
                                     </div>
                                   </div>
                                 )}

@@ -33,7 +33,7 @@ const oracleServices = [
   },
   {
     name: 'Generative AI',
-    description: 'Grounded answers and reasoning over retrieved document context.',
+    description: 'Grounded answers and reasoning over cited document context.',
     iconSvg: makeMonochromeOracleSvg(generativeAiSvg),
   },
 ];

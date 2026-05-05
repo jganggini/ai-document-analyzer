@@ -93,11 +93,11 @@ class FilePagesRepository:
                     file_id=int(file_id),
                     file_pages_number=int(page_number),
                     file_pages_image_path_local=image_path_local or "",
-                    file_pages_output_obj_name=non_empty_string(file_pages_output_obj_name, fallback="local-page-only"),
-                    file_pages_ocr_obj_name=non_empty_string(file_pages_ocr_obj_name, fallback=""),
+                    file_pages_output_obj_name=non_empty_string(file_pages_output_obj_name, default_value="local-page-only"),
+                    file_pages_ocr_obj_name=non_empty_string(file_pages_ocr_obj_name, default_value=""),
                     file_pages_ocr_confidence=float(max(0.0, min(1.0, file_pages_ocr_confidence))),
-                    file_pages_ocr_method=non_empty_string(file_pages_ocr_method, fallback="docling_rapidocr"),
-                    file_pages_ocr_text=non_empty_string(ocr_text, fallback="No OCR text extracted."),
+                    file_pages_ocr_method=non_empty_string(file_pages_ocr_method, default_value="docling_rapidocr"),
+                    file_pages_ocr_text=non_empty_string(ocr_text, default_value="No OCR text extracted."),
                     file_pages_markdown_text=str(markdown_text),
                     file_pages_visual_summary=str(file_pages_visual_summary or ""),
                     file_pages_layout_json=str(file_pages_layout_json or "{}"),
@@ -120,17 +120,17 @@ class FilePagesRepository:
                     "file_pages_image_path_local": image_path_local or "",
                     "file_pages_output_obj_name": non_empty_string(
                         file_pages_output_obj_name,
-                        fallback="local-page-only",
+                        default_value="local-page-only",
                     ),
-                    "file_pages_ocr_obj_name": non_empty_string(file_pages_ocr_obj_name, fallback=""),
+                    "file_pages_ocr_obj_name": non_empty_string(file_pages_ocr_obj_name, default_value=""),
                     "file_pages_ocr_confidence": float(max(0.0, min(1.0, file_pages_ocr_confidence))),
                     "file_pages_ocr_method": non_empty_string(
                         file_pages_ocr_method,
-                        fallback="docling_rapidocr",
+                        default_value="docling_rapidocr",
                     ),
                     "file_pages_width": int(width or 0),
                     "file_pages_height": int(height or 0),
-                    "file_pages_ocr_text": non_empty_string(ocr_text, fallback="No OCR text extracted."),
+                    "file_pages_ocr_text": non_empty_string(ocr_text, default_value="No OCR text extracted."),
                     "file_pages_markdown_text": str(markdown_text),
                     "file_pages_visual_summary": str(file_pages_visual_summary or ""),
                     "file_pages_layout_json": str(file_pages_layout_json or "{}"),
@@ -162,7 +162,7 @@ class FilePagesRepository:
                 SET file_pages_ocr_text = :ocr_text
                 WHERE file_pages_id = :page_id
                 """,
-                ocr_text=non_empty_string(ocr_text, fallback="No OCR text extracted."),
+                ocr_text=non_empty_string(ocr_text, default_value="No OCR text extracted."),
                 page_id=int(page_id),
             )
             connection.commit()

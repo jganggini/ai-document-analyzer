@@ -39,11 +39,11 @@ class ArchiveMetadataRepository:
         return normalized[:64]
 
     @staticmethod
-    def _normalize_access_scope(value: str | None, *, fallback: str = "private") -> str:
+    def _normalize_access_scope(value: str | None, *, default_value: str = "private") -> str:
         normalized = str(value or "").strip().lower()
         if normalized == "all":
             return "all"
-        return fallback
+        return default_value
 
     @staticmethod
     def _file_access_condition(

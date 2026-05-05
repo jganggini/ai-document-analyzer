@@ -55,9 +55,9 @@ def _escape_oracle_text_term(term: str) -> str:
     return f"{{{escaped}}}"
 
 
-def non_empty_string(value: str | None, *, fallback: str) -> str:
+def non_empty_string(value: str | None, *, default_value: str) -> str:
     normalized = (value or "").strip()
-    return normalized if normalized else fallback
+    return normalized if normalized else default_value
 
 
 def status_to_code(status: str) -> int:

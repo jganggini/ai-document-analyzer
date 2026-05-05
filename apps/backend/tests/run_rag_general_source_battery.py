@@ -428,15 +428,15 @@ def _run_question(
     )
     answer_text = ""
     citations: list[dict[str, Any]] = []
-    retrieved_sources: list[dict[str, Any]] = []
+    evidence_sources: list[dict[str, Any]] = []
     telemetry: dict[str, Any] = {}
     strategy = ""
     answer_mode = ""
     if isinstance(result.payload, dict):
         answer_text = str(result.payload.get("answer_text") or result.payload.get("answer") or "")
         citations = [item for item in list(result.payload.get("citations") or []) if isinstance(item, dict)]
-        retrieved_sources = [
-            item for item in list(result.payload.get("retrieved_sources") or result.payload.get("sources") or [])
+        evidence_sources = [
+            item for item in list(result.payload.get("evidence_sources") or result.payload.get("sources") or [])
             if isinstance(item, dict)
         ]
         telemetry = dict(result.payload.get("telemetry") or {})
@@ -446,13 +446,13 @@ def _run_question(
     distinct_files = len(
         {
             str(item.get("name") or item.get("file_name") or "").strip()
-            for item in retrieved_sources
+            for item in evidence_sources
             if str(item.get("name") or item.get("file_name") or "").strip()
         }
     )
     top_sources = [
         str(item.get("name") or "").strip()
-        for item in retrieved_sources[:4]
+        for item in evidence_sources[:4]
         if str(item.get("name") or "").strip()
     ]
     return {
@@ -467,7 +467,7 @@ def _run_question(
         "answer_text": answer_text,
         "answer_preview": _short_text(answer_text, limit=420),
         "citations_count": len(citations),
-        "retrieved_sources_count": len(retrieved_sources),
+        "evidence_sources_count": len(evidence_sources),
         "distinct_files": distinct_files,
         "matched_expected_terms": matched_terms,
         "missing_expected_terms": missing_terms,
@@ -509,7 +509,7 @@ def _build_markdown_report(*, run_data: dict[str, Any]) -> str:
             f"strategy: `{item['strategy'] or '-'}` | mode: `{item['answer_mode'] or '-'}`"
         )
         lines.append(
-            f"- citations: `{item['citations_count']}` | retrieved_sources: `{item['retrieved_sources_count']}` | "
+            f"- citations: `{item['citations_count']}` | evidence_sources: `{item['evidence_sources_count']}` | "
             f"distinct_files: `{item['distinct_files']}`"
         )
         if item["scope_archive_slugs"]:

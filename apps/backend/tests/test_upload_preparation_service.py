@@ -16,7 +16,7 @@ def _build_settings(tmp_path: Path) -> Settings:
     )
 
 
-def test_prepare_saved_files_uses_zip_name_for_folio_without_legacy_classification(tmp_path: Path) -> None:
+def test_prepare_saved_files_uses_zip_name_for_folio_without_retired_classification(tmp_path: Path) -> None:
     settings = _build_settings(tmp_path)
     settings.upload_path.mkdir(parents=True, exist_ok=True)
 
@@ -50,7 +50,7 @@ def test_prepare_saved_files_uses_zip_name_for_folio_without_legacy_classificati
     assert all(item.access == "private" for item in group.items)
 
 
-def test_prepare_saved_files_keeps_pdf_defaults_without_legacy_classification(tmp_path: Path) -> None:
+def test_prepare_saved_files_keeps_pdf_defaults_without_retired_classification(tmp_path: Path) -> None:
     settings = _build_settings(tmp_path)
     settings.upload_path.mkdir(parents=True, exist_ok=True)
 

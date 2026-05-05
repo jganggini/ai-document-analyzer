@@ -170,6 +170,9 @@ export function Users() {
             <div className="flex items-start justify-between gap-4 mb-4">
               <div>
                 <h1 className="text-3xl font-bold text-gray-900 mb-2">Users</h1>
+                <p className="text-oracle-light-gray">
+                  Manage user accounts, access groups, and administrative permissions.
+                </p>
               </div>
               <button
                 type="button"

@@ -218,17 +218,128 @@ export type MetadataUploadUpdateRequest = {
   access_scope?: 'private' | 'all';
 };
 
+export type ImprovementRouteSummary = {
+  route: string;
+  count: number;
+};
+
+export type ImprovementOverview = {
+  trace_count: number;
+  completed_count: number;
+  failed_count: number;
+  running_count: number;
+  avg_cited_sources: number;
+  avg_evidence_sources: number;
+  routes: ImprovementRouteSummary[];
+  recent_feedback_count: number;
+  eval_case_count: number;
+  eval_run_count: number;
+  checkpoint_thread_count: number;
+  checkpoint_count: number;
+  checkpoint_write_count: number;
+};
+
+export type ImprovementTraceRun = {
+  trace_id: string;
+  thread_id: string;
+  user_id?: number | null;
+  conversation_id?: number | null;
+  question: string;
+  status: string;
+  answerability_route: string;
+  answer_preview: string;
+  cited_sources_count: number;
+  evidence_sources_count: number;
+  metadata: Record<string, any>;
+  error: string;
+  started_at: string;
+  finished_at: string;
+};
+
+export type ImprovementTraceStep = {
+  step_id: number;
+  trace_id: string;
+  node: string;
+  status: string;
+  payload: Record<string, any>;
+  state_patch: Record<string, any>;
+  duration_ms: number;
+  error: string;
+  created_at: string;
+};
+
+export type ImprovementFeedbackEvent = {
+  feedback_event_id: number;
+  user_id?: number | null;
+  conversation_id?: number | null;
+  trace_id: string;
+  event_type: string;
+  value: string;
+  assistant_message_id: string;
+  user_prompt: string;
+  assistant_answer_preview: string;
+  metadata: Record<string, any>;
+  created_at: string;
+};
+
+export type ImprovementEvalCase = {
+  eval_case_id: number;
+  name: string;
+  category: string;
+  question: string;
+  expected: Record<string, any>;
+  source: string;
+  created_at: string;
+};
+
+export type ImprovementEvalRun = {
+  eval_run_id: number;
+  name: string;
+  status: string;
+  metadata: Record<string, any>;
+  started_at: string;
+  finished_at: string;
+  result_count: number;
+  avg_score: number;
+  passed_count: number;
+};
+
+export type ImprovementEvalResult = {
+  eval_result_id: number;
+  eval_run_id: number;
+  eval_case_id: number;
+  case_name: string;
+  question: string;
+  trace_id: string;
+  status: string;
+  score: number;
+  details: Record<string, any>;
+  created_at: string;
+};
+
+export type ImprovementCheckpointThread = {
+  thread_id: string;
+  checkpoint_count: number;
+  write_count: number;
+  trace_count: number;
+  latest_trace_id: string;
+  latest_question: string;
+  last_checkpoint_at: string;
+  created_at: string;
+  updated_at: string;
+};
+
 function normalizeSourceItems(sourceItems: any[], evidenceBySource: Map<number, any>): ChatSource[] {
   return sourceItems.map((item: any, index: number) => {
     const sourceNumber = Number(item?.source_number ?? item?.doc_id ?? 0);
     const matchedEvidence = evidenceBySource.get(sourceNumber);
     const fileName = String(item?.file_name || '').trim();
     const pageNumber = Number(item?.page_number ?? matchedEvidence?.page_number ?? 0);
-    const fallbackName = String(item?.name || '').trim();
+    const sourceName = String(item?.name || '').trim();
     const snippet = String(item?.snippet ?? matchedEvidence?.summary_text ?? '').trim();
     return {
       doc_id: String(item?.doc_id || item?.source_number || index + 1),
-      name: fallbackName || `${fileName || 'document'} - page ${pageNumber || '?'}`,
+      name: sourceName || `${fileName || 'document'} - page ${pageNumber || '?'}`,
       source_number: sourceNumber || undefined,
       file_id: Number(item?.file_id ?? matchedEvidence?.file_id ?? 0) || undefined,
       page_number: pageNumber || undefined,
@@ -248,24 +359,13 @@ function normalizeAskResponsePayload(data: any) {
       }
     }
   }
-  const sourceItems = Array.isArray(data?.sources)
-    ? data.sources
-    : Array.isArray(data?.citations)
-    ? data.citations
-    : [];
-  const sources: ChatSource[] = normalizeSourceItems(sourceItems, evidenceBySource);
   const citedSources: ChatSource[] = Array.isArray(data?.cited_sources)
     ? normalizeSourceItems(data.cited_sources, evidenceBySource)
-    : [];
-  const retrievedSources: ChatSource[] = Array.isArray(data?.retrieved_sources)
-    ? normalizeSourceItems(data.retrieved_sources, evidenceBySource)
     : [];
   return {
     success: true,
     reply: data?.answer || data?.answer_text || '',
-    sources,
     citedSources,
-    retrievedSources,
     model_used: data?.model_used || '',
     thread_id: String(data?.thread_id || ''),
     reasoning: {
@@ -608,6 +708,57 @@ export const chatApi = {
     api.get(`/chats/${conversationId}/export`, {
       params: { format },
       responseType: format === 'markdown' ? 'blob' : 'json',
+    }),
+};
+
+export const improvementApi = {
+  getOverview: () => api.get<ImprovementOverview>('/improvement/overview'),
+  listTraces: (limit: number = 25) =>
+    api.get<{ items: ImprovementTraceRun[] }>('/improvement/traces', {
+      params: { limit },
+    }),
+  listTraceSteps: (traceId: string, limit: number = 200) =>
+    api.get<{ items: ImprovementTraceStep[] }>(`/improvement/traces/${traceId}/steps`, {
+      params: { limit },
+    }),
+  listFeedback: (limit: number = 25) =>
+    api.get<{ items: ImprovementFeedbackEvent[] }>('/improvement/feedback', {
+      params: { limit },
+    }),
+  recordFeedback: (payload: {
+    event_type: string;
+    value: string;
+    conversation_id?: number | null;
+    trace_id?: string | null;
+    assistant_message_id: string;
+    user_prompt: string;
+    assistant_answer: string;
+    metadata?: Record<string, any>;
+  }) => api.post('/improvement/feedback', payload),
+  listEvalCases: (limit: number = 100) =>
+    api.get<{ items: ImprovementEvalCase[] }>('/improvement/eval-cases', {
+      params: { limit },
+    }),
+  createEvalCase: (payload: {
+    name: string;
+    category: string;
+    question: string;
+    expected?: Record<string, any>;
+    source?: string;
+  }) => api.post<{ item: ImprovementEvalCase }>('/improvement/eval-cases', payload),
+  listEvalRuns: (limit: number = 25) =>
+    api.get<{ items: ImprovementEvalRun[] }>('/improvement/eval-runs', {
+      params: { limit },
+    }),
+  createEvalRun: (payload: { name?: string; case_ids: number[]; top_k?: number }) =>
+    api.post('/improvement/eval-runs', payload),
+  listEvalResults: (runId: number, limit: number = 100) =>
+    api.get<{ items: ImprovementEvalResult[] }>(`/improvement/eval-runs/${runId}/results`, {
+      params: { limit },
+    }),
+  listCheckpoints: (limit: number = 25) =>
+    api.get<{ items: ImprovementCheckpointThread[] }>('/improvement/checkpoints', {
+      params: { limit },
     }),
 };
 

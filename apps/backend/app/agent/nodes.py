@@ -66,11 +66,11 @@ def _resolve_answerability_route(
     if explicit_route:
         return explicit_route
     if metadata_phase_used and document_phase_required:
-        return "metadata_plus_documents"
+        return "hybrid"
     if metadata_phase_used and answer_override:
-        return "structured_only"
+        return "metadata"
     if document_phase_required:
-        return "documents_only"
+        return "documents"
     return ""
 
 
@@ -80,7 +80,7 @@ def _build_retrieval_question(
     answerability_route: str = "",
 ) -> str:
     safe_question = str(question or "").strip()
-    if str(answerability_route or "").strip() == "metadata_plus_documents":
+    if str(answerability_route or "").strip() == "hybrid":
         return (
             f"{safe_question}\n\n"
             "Busqueda documental ampliada: recuperar evidencia directa o indirecta sobre la pregunta, "
@@ -96,7 +96,8 @@ def _resolve_retrieval_controls(state: QAGraphState) -> _RetrievalControls:
     min_pages_per_selected_doc = max(0, int(state.get("min_pages_per_selected_doc") or 0))
     summary_mode = str(state.get("summary_mode") or "default").strip() or "default"
     answerability_route = str(state.get("answerability_route") or "").strip()
-    if answerability_route != "metadata_plus_documents":
+    conversation_scoped = str(state.get("scope_origin") or "").strip().lower() == "conversation"
+    if answerability_route != "hybrid" and not conversation_scoped:
         return _RetrievalControls(
             candidate_k=candidate_k,
             min_pages_per_selected_doc=min_pages_per_selected_doc,
@@ -153,18 +154,38 @@ class QAGraphNodes:
     repository: FileRepository
 
     @staticmethod
-    def _build_conversation_scoped_question(*, question: str, archive_slugs: list[str]) -> str:
+    def _build_conversation_scoped_question(
+        *,
+        question: str,
+        archive_slugs: list[str],
+        chat_history: list[dict[str, str]] | None = None,
+    ) -> str:
         safe_question = str(question or "").strip()
         safe_archive_slugs = [str(item).strip() for item in list(archive_slugs or []) if str(item).strip()]
+        history_items = list(chat_history or [])[-8:]
+        previous_user = ""
+        previous_assistant = ""
+        for item in reversed(history_items):
+            role = str(item.get("role") or "").strip().lower()
+            content = str(item.get("content") or "").strip()
+            if role == "assistant" and not previous_assistant:
+                previous_assistant = content[:1200]
+            elif role == "user" and not previous_user:
+                previous_user = content[:600]
+            if previous_user and previous_assistant:
+                break
+        context_lines = [f"Follow-up question: {safe_question}"]
+        if previous_user:
+            context_lines.append(f"Previous user question: {previous_user}")
+        if previous_assistant:
+            context_lines.append(f"Previous assistant answer excerpt: {previous_assistant}")
         if not safe_archive_slugs:
-            return safe_question
+            return "\n".join(context_lines)
         rendered_scope = ", ".join(safe_archive_slugs[:24])
         if len(safe_archive_slugs) > 24:
             rendered_scope += ", ..."
-        return (
-            f"{safe_question}\n\n"
-            f"Scoped archives inherited from the previous turn: {rendered_scope}."
-        )
+        context_lines.append(f"Scoped archives inherited from the previous turn: {rendered_scope}.")
+        return "\n".join(context_lines)
 
     def classify_intent(self, state: QAGraphState) -> dict[str, Any]:
         started_at = perf_counter()
@@ -252,6 +273,7 @@ class QAGraphNodes:
             effective_question = self._build_conversation_scoped_question(
                 question=original_question,
                 archive_slugs=list(resolution.scope_archive_slugs),
+                chat_history=list(state.get("chat_history") or []),
             )
         return {
             "file_ids": resolved_file_ids,
@@ -285,16 +307,44 @@ class QAGraphNodes:
         if current_date is not None and not isinstance(current_date, date):
             current_date = None
         prior_file_ids = [int(file_id) for file_id in list(state.get("file_ids") or []) if int(file_id) > 0]
+        question_class = str(state.get("question_class") or "extractive")
+        requested_metadata_fields = list(state.get("requested_metadata_fields") or [])
+        if (
+            state.get("conversation_scope_applied")
+            and not requested_metadata_fields
+            and question_class not in {"metadata_comparison", "analytics"}
+            and str(state.get("metadata_mode") or "auto").strip().lower() != "metadata_first"
+        ):
+            return {
+                "file_ids": prior_file_ids,
+                "selected_docs_count": len(prior_file_ids),
+                "fact_context_text": "",
+                "answer_override": None,
+                "facts_used_count": 0,
+                "file_group_ids": [],
+                "metadata_phase_used": False,
+                "resolved_archive_slugs": list(state.get("scope_archive_slugs") or []),
+                "resolved_metadata_fields": [],
+                "metadata_only_reason": "",
+                "answerability_route": "documents",
+                "confidence_notes": list(state.get("confidence_notes") or [])
+                + ["Conversation scope was reused for document retrieval."],
+                "node_timings_ms": _merge_node_timing(state, node_key="resolve_facts", started_at=started_at),
+            }
+        carry_conversation_metadata_fields = bool(
+            state.get("conversation_scope_metadata_fields")
+            and question_class in {"metadata_comparison", "analytics"}
+        )
         resolution = self.fact_resolver.resolve(
-            question_class=str(state.get("question_class") or "extractive"),
+            question_class=question_class,
             question=str(state.get("original_question") or state["question"]),
             user_id=int(state.get("user_id") or 0),
             file_ids=prior_file_ids,
             metadata_mode=str(state.get("metadata_mode") or "auto"),
             archive_slugs=list(state.get("requested_archive_slugs") or state.get("scope_archive_slugs") or []),
             metadata_fields=list(
-                state.get("requested_metadata_fields")
-                or state.get("conversation_scope_metadata_fields")
+                requested_metadata_fields
+                or (state.get("conversation_scope_metadata_fields") if carry_conversation_metadata_fields else [])
                 or []
             ),
             reference_date=current_date,
@@ -308,20 +358,12 @@ class QAGraphNodes:
         merged_notes = prior_notes + [
             note for note in resolution.confidence_notes if note not in prior_notes
         ]
-        should_skip_retrieval = bool(resolution.answer_override) and not bool(
-            resolution.document_phase_required
-        )
         answerability_route = _resolve_answerability_route(
             answerability_route=str(resolution.answerability_route or ""),
             metadata_phase_used=bool(resolution.metadata_phase_used),
             document_phase_required=bool(resolution.document_phase_required),
             answer_override=resolution.answer_override,
         )
-        resolved_strategy = str(state.get("strategy") or "").strip()
-        resolved_retrieval_route = str(state.get("retrieval_route") or "").strip()
-        if should_skip_retrieval:
-            resolved_strategy = "facts-first"
-            resolved_retrieval_route = str(resolution.metadata_only_reason or "facts-first")
         return {
             "file_ids": resolved_file_ids,
             "selected_docs_count": len(resolved_file_ids),
@@ -339,11 +381,46 @@ class QAGraphNodes:
             "resolved_metadata_fields": list(resolution.resolved_metadata_fields or []),
             "metadata_only_reason": str(resolution.metadata_only_reason or ""),
             "answerability_route": answerability_route,
-            "skip_retrieval": should_skip_retrieval,
-            "strategy": resolved_strategy,
-            "retrieval_route": resolved_retrieval_route,
             "confidence_notes": merged_notes,
             "node_timings_ms": _merge_node_timing(state, node_key="resolve_facts", started_at=started_at),
+        }
+
+    def decide_answerability(self, state: QAGraphState) -> dict[str, Any]:
+        started_at = perf_counter()
+        raw_route = str(state.get("answerability_route") or "").strip().lower()
+        has_metadata = bool(state.get("metadata_phase_used") or state.get("fact_context_text"))
+        has_answer_override = bool(str(state.get("answer_override") or "").strip())
+        route = raw_route if raw_route in {"metadata", "hybrid", "documents"} else ""
+        if not route:
+            if has_metadata and has_answer_override:
+                route = "metadata"
+            elif has_metadata:
+                route = "hybrid"
+            else:
+                route = "documents"
+
+        answer_override = str(state.get("answer_override") or "").strip() or None
+        strategy = str(state.get("strategy") or "").strip()
+        retrieval_route = str(state.get("retrieval_route") or "").strip()
+        document_phase_used = bool(state.get("document_phase_used") or False)
+        if route == "metadata":
+            strategy = strategy or "facts-first"
+            retrieval_route = retrieval_route or str(state.get("metadata_only_reason") or "metadata")
+            document_phase_used = False
+        else:
+            answer_override = None
+            retrieval_route = retrieval_route or route
+
+        return {
+            "answerability_route": route,
+            "answer_override": answer_override,
+            "strategy": strategy,
+            "retrieval_route": retrieval_route,
+            "document_phase_used": document_phase_used,
+            "evidence": [] if route == "metadata" else list(state.get("evidence") or []),
+            "analyzed_pages": [] if route == "metadata" else list(state.get("analyzed_pages") or []),
+            "visual_result": _empty_visual_result() if route == "metadata" else state.get("visual_result"),
+            "node_timings_ms": _merge_node_timing(state, node_key="decide_answerability", started_at=started_at),
         }
 
     def retrieve_candidates(self, state: QAGraphState) -> dict[str, Any]:
@@ -378,7 +455,7 @@ class QAGraphNodes:
         confidence_notes = list(state.get("confidence_notes") or [])
         if retrieval_controls.coverage_boosted:
             coverage_note = (
-                "Metadata+documents route expanded generic per-document retrieval coverage "
+                "Hybrid route expanded generic per-document retrieval coverage "
                 "within the resolved metadata scope."
             )
             if coverage_note not in confidence_notes:
@@ -478,7 +555,12 @@ class QAGraphNodes:
         if not isinstance(visual_result, VisualInspectionResult):
             visual_result = _empty_visual_result()
         hybrid_answer: HybridAnswerResult = self.hybrid_answer_tool.answer(
-            question=str(state.get("original_question") or state["question"]),
+            question=str(
+                state.get("effective_question")
+                if state.get("conversation_scope_applied")
+                else state.get("original_question")
+                or state["question"]
+            ),
             evidence=list(state.get("evidence") or []),
             strategy=str(state.get("strategy") or "fast-grounded"),
             visual_result=visual_result,
@@ -523,7 +605,7 @@ class QAGraphNodes:
                 payload["snippet"] = str(item.summary_text or "")[:500]
             return payload
 
-        all_sources = [
+        evidence_sources = [
             build_source_metadata(item)
             for item in evidence
         ]
@@ -536,7 +618,6 @@ class QAGraphNodes:
             for item in evidence
             if int(item.source_number) in selected_citations_set
         ]
-        effective_sources = cited_sources if cited_sources else list(all_sources)
         distinct_files = sorted({int(item.file_id) for item in evidence if int(item.file_id) > 0})
         scope_file_ids = sorted({int(file_id) for file_id in file_ids if int(file_id) > 0})
         scope_file_id = scope_file_ids[0] if len(scope_file_ids) == 1 else None
@@ -626,11 +707,10 @@ class QAGraphNodes:
                 str(key): int(value)
                 for key, value in dict(state.get("node_timings_ms") or {}).items()
             },
-            "sources": effective_sources,
-            "retrieved_sources": all_sources,
+            "evidence_sources": evidence_sources,
             "cited_sources": cited_sources,
             "selected_citations": selected_citations,
-            "retrieved_sources_count": len(all_sources),
+            "evidence_sources_count": len(evidence_sources),
             "cited_sources_count": len(cited_sources),
         }
         user_id = int(state.get("user_id") or 0)
@@ -645,5 +725,7 @@ class QAGraphNodes:
             model_used=answer.model_used,
         )
         return {
+            "evidence_sources_count": len(evidence_sources),
+            "cited_sources_count": len(cited_sources),
             "node_timings_ms": _merge_node_timing(state, node_key="persist_turn", started_at=started_at),
         }

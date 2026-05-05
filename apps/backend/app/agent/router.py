@@ -209,14 +209,14 @@ class GraphSearchResponder:
         return any(any(marker in msg for marker in greeting_markers) for msg in recent_assistant_messages)
 
     def _resolve_assistant_name(self) -> str:
-        fallback = "Nadia Assist"
+        default_name = "Nadia Assist"
         if self.assistant_name_provider is None:
-            return fallback
+            return default_name
         try:
             resolved = str(self.assistant_name_provider() or "").strip()
-            return resolved or fallback
+            return resolved or default_name
         except Exception:
-            return fallback
+            return default_name
 
     def respond(self, *, question: str, chat_history: list[dict[str, str]] | None = None) -> LLMResult:
         assistant_name = self._resolve_assistant_name()

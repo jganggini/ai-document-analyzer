@@ -18,13 +18,13 @@ class AuthService:
         self.config_service = ConfigService(db_manager)
 
     def _resolve_session_timeout_minutes(self) -> int:
-        fallback = int(self.settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        default_minutes = int(self.settings.ACCESS_TOKEN_EXPIRE_MINUTES)
         try:
-            raw_value = self.config_service.get_value("app.session_timeout_minutes", str(fallback)).strip()
+            raw_value = self.config_service.get_value("app.session_timeout_minutes", str(default_minutes)).strip()
             resolved = int(raw_value)
             return max(1, resolved)
         except Exception:
-            return fallback
+            return default_minutes
 
     @trace
     def authenticate_user(self, username: str, password: str) -> Optional[dict]:
@@ -111,4 +111,3 @@ class AuthService:
         finally:
             cursor.close()
             conn.close()
-

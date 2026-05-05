@@ -146,6 +146,21 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
   const bottomMenuItems: RouteMenuItem[] = [
     {
+      id: 'improvement',
+      name: 'Observability',
+      icon: (
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M4 19V5m0 14h16M8 16v-5m4 5V8m4 8v-7M7 7l4 3 4-5 4 3"
+          />
+        </svg>
+      ),
+      path: '/observability'
+    },
+    {
       id: 'metadata',
       name: 'Metadata',
       icon: (
@@ -327,7 +342,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           </section>
         )}
 
-        <div className={`mt-auto translate-y-[10px] ${collapsed ? '' : 'pt-2 border-t border-white/10'}`}>
+        <div className={`mt-auto pb-4 ${collapsed ? '' : 'pt-2 border-t border-white/10'}`}>
           {bottomMenuItems.map((item) => renderMenuButton(item))}
         </div>
       </nav>

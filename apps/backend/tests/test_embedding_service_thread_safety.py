@@ -11,12 +11,12 @@ def test_nomic_provider_is_initialized_once_across_threads(monkeypatch) -> None:
 
     created: list[object] = []
 
-    class FakeProvider:
+    class StubProvider:
         def __init__(self) -> None:
             time.sleep(0.05)
             created.append(self)
 
-    monkeypatch.setattr(embedding_service, "NomicLocalMultimodalProvider", FakeProvider)
+    monkeypatch.setattr(embedding_service, "NomicLocalMultimodalProvider", StubProvider)
 
     with ThreadPoolExecutor(max_workers=6) as executor:
         providers = list(executor.map(lambda _: embedding_service.get_nomic_local_provider(), range(12)))

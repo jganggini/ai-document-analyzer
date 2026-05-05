@@ -95,15 +95,6 @@ class OCIGenerativeAIService:
         if not self._is_embedding_model_id(candidate):
             return candidate
 
-        fallback = str(self.settings.oci_genai_model or "").strip()
-        if fallback and fallback != candidate and not self._is_embedding_model_id(fallback):
-            logger.warning(
-                "genai.model apunta a embedding (%s). Se usa fallback generativo %s.",
-                candidate,
-                fallback,
-            )
-            return fallback
-
         raise RuntimeError(
             "Configuracion invalida: `genai.model` apunta a un modelo de embedding "
             f"('{candidate}'). Debe ser un modelo generativo de chat; "
