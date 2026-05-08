@@ -1,5 +1,10 @@
 import dagre from '@dagrejs/dagre';
-import type { GraphEdgePath, GraphRenderNode } from './RAGChatPanel.types';
+import type {
+  GraphEdgePath,
+  GraphRenderNode,
+  NodeRuntimeState,
+  NodeRuntimeStatus,
+} from './RAGChatPanel.types';
 
 export type GraphNodeDefinition = { key: string; label: string; kind: string };
 export type GraphEdgeDefinition = { source: string; target: string; condition?: string };
@@ -129,4 +134,57 @@ export function buildGraphWithDagre(
   }
 
   return { nodes, edgePaths };
+}
+
+export function resolveGraphRuntimeNodeStatus(
+  nodeKey: string,
+  graphRunStatus: 'idle' | 'running' | 'completed' | 'failed',
+  graphNodeStates: Record<string, NodeRuntimeState>
+): NodeRuntimeStatus {
+  if (nodeKey === 'START') {
+    if (graphRunStatus === 'running' || graphRunStatus === 'completed' || graphRunStatus === 'failed') {
+      return 'completed';
+    }
+    return 'idle';
+  }
+  if (nodeKey === 'END') {
+    if (graphRunStatus === 'completed') return 'completed';
+    if (graphRunStatus === 'failed') return 'failed';
+    if (graphRunStatus === 'running') return 'running';
+    return 'idle';
+  }
+  return graphNodeStates[nodeKey]?.status || 'idle';
+}
+
+export function resolveGraphNodeClassName(status: NodeRuntimeStatus, selected?: boolean): string {
+  if (selected) {
+    if (status === 'running') return 'fill-blue-200 stroke-blue-600 text-blue-800';
+    if (status === 'completed') return 'fill-emerald-200 stroke-emerald-600 text-emerald-800';
+    if (status === 'failed') return 'fill-rose-200 stroke-rose-600 text-rose-800';
+    return 'fill-gray-200 stroke-gray-500 text-oracle-dark-gray';
+  }
+  if (status === 'running') return 'fill-blue-50 stroke-blue-500 text-blue-700';
+  if (status === 'completed') return 'fill-emerald-50 stroke-emerald-500 text-emerald-700';
+  if (status === 'failed') return 'fill-rose-50 stroke-rose-500 text-rose-700';
+  return 'fill-white stroke-gray-300 text-oracle-medium-gray';
+}
+
+export function resolveGraphEdgeClassName(
+  edge: GraphDefinition['edges'][number],
+  resolveNodeStatus: (nodeKey: string) => NodeRuntimeStatus
+): string {
+  const sourceStatus = resolveNodeStatus(edge.source);
+  const targetStatus = resolveNodeStatus(edge.target);
+  if (sourceStatus === 'failed' || targetStatus === 'failed') return 'stroke-rose-500';
+  if (targetStatus === 'running') return 'stroke-blue-500';
+  if (sourceStatus === 'completed' && targetStatus === 'completed') return 'stroke-emerald-500';
+  if (sourceStatus === 'completed') return 'stroke-gray-400';
+  return 'stroke-gray-300';
+}
+
+export function formatGraphNodeDuration(durationMs: number): string {
+  if (durationMs < 1) return '<1ms';
+  if (durationMs < 1000) return `${Math.max(1, Math.round(durationMs))}ms`;
+  if (durationMs < 10_000) return `${(durationMs / 1000).toFixed(1)}s`;
+  return `${Math.round(durationMs / 1000)}s`;
 }

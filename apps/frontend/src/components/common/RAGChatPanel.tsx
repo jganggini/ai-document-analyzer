@@ -31,7 +31,11 @@ import {
 import {
   buildGraphWithDagre,
   DEFAULT_GRAPH_DEFINITION,
+  formatGraphNodeDuration,
   NODE_HEIGHT,
+  resolveGraphEdgeClassName,
+  resolveGraphNodeClassName,
+  resolveGraphRuntimeNodeStatus,
 } from './RAGChatPanel.graph';
 import {
   cleanPageMarkdownForPreview,
@@ -327,51 +331,16 @@ export function RAGChatPanel() {
     return { inputPayload, outputPayload, responseText, lastTimestamp };
   }, [selectedGraphNodeEvents, selectedGraphNodeKey]);
 
-  const resolveGraphNodeStatus = (nodeKey: string): NodeRuntimeStatus => {
-    if (nodeKey === 'START') {
-      if (graphRunStatus === 'running' || graphRunStatus === 'completed' || graphRunStatus === 'failed') {
-        return 'completed';
-      }
-      return 'idle';
-    }
-    if (nodeKey === 'END') {
-      if (graphRunStatus === 'completed') return 'completed';
-      if (graphRunStatus === 'failed') return 'failed';
-      if (graphRunStatus === 'running') return 'running';
-      return 'idle';
-    }
-    return graphNodeStates[nodeKey]?.status || 'idle';
-  };
+  const resolveGraphNodeStatus = (nodeKey: string): NodeRuntimeStatus =>
+    resolveGraphRuntimeNodeStatus(nodeKey, graphRunStatus, graphNodeStates);
 
-  const resolveNodeClassName = (status: NodeRuntimeStatus, selected?: boolean) => {
-    if (selected) {
-      if (status === 'running') return 'fill-blue-200 stroke-blue-600 text-blue-800';
-      if (status === 'completed') return 'fill-emerald-200 stroke-emerald-600 text-emerald-800';
-      if (status === 'failed') return 'fill-rose-200 stroke-rose-600 text-rose-800';
-      return 'fill-gray-200 stroke-gray-500 text-oracle-dark-gray';
-    }
-    if (status === 'running') return 'fill-blue-50 stroke-blue-500 text-blue-700';
-    if (status === 'completed') return 'fill-emerald-50 stroke-emerald-500 text-emerald-700';
-    if (status === 'failed') return 'fill-rose-50 stroke-rose-500 text-rose-700';
-    return 'fill-white stroke-gray-300 text-oracle-medium-gray';
-  };
+  const resolveNodeClassName = (status: NodeRuntimeStatus, selected?: boolean) =>
+    resolveGraphNodeClassName(status, selected);
 
-  const resolveEdgeClassName = (edge: GraphDefinition['edges'][number]) => {
-    const sourceStatus = resolveGraphNodeStatus(edge.source);
-    const targetStatus = resolveGraphNodeStatus(edge.target);
-    if (sourceStatus === 'failed' || targetStatus === 'failed') return 'stroke-rose-500';
-    if (targetStatus === 'running') return 'stroke-blue-500';
-    if (sourceStatus === 'completed' && targetStatus === 'completed') return 'stroke-emerald-500';
-    if (sourceStatus === 'completed') return 'stroke-gray-400';
-    return 'stroke-gray-300';
-  };
+  const resolveEdgeClassName = (edge: GraphDefinition['edges'][number]) =>
+    resolveGraphEdgeClassName(edge, resolveGraphNodeStatus);
 
-  const formatNodeDuration = (durationMs: number) => {
-    if (durationMs < 1) return '<1ms';
-    if (durationMs < 1000) return `${Math.max(1, Math.round(durationMs))}ms`;
-    if (durationMs < 10_000) return `${(durationMs / 1000).toFixed(1)}s`;
-    return `${Math.round(durationMs / 1000)}s`;
-  };
+  const formatNodeDuration = formatGraphNodeDuration;
 
   const resetGraphRuntimeState = () => {
     const nextState: Record<string, NodeRuntimeState> = {};
