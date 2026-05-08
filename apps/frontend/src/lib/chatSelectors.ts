@@ -1,7 +1,11 @@
-import type { RAGScopeOptions } from '../services/api';
-
 const FILE_EXTENSION_PATTERN = /\.(?:zip|pdf)\b/i;
 const WHITESPACE_PATTERN = /\s+/g;
+
+export type RAGScopeOptions = {
+  files: string[];
+  metadata_fields: string[];
+  has_metadata: boolean;
+};
 
 export type ParsedChatSelectors = {
   cleanedQuestion: string;

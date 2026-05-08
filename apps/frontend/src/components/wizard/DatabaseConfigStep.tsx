@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import api from '../../services/api';
+import api from '../../services/apiClient';
 
 const DEFAULT_DSN = 'ora26ai_medium';
 const PREFERRED_DSN_SUFFIXES = ['_medium', '_high', '_tp', '_low', '_tpurgent'];

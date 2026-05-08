@@ -1,4 +1,4 @@
-import type { ChatConversationSummary } from '../services/api';
+import type { ChatConversationSummary } from '../services/apiTypes';
 
 function toTimestamp(value: string): number {
   const parsed = new Date(value).getTime();

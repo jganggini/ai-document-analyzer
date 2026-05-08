@@ -5,7 +5,7 @@ import remarkGfm from 'remark-gfm';
 import {
   buildSourceHighlightTerms,
   buildSourcePreviewMarkdownComponents,
-} from './RAGChatPanel.model';
+} from './RAGChatPanel.markdown';
 import { GlassModal } from './GlassModal';
 import { LoadingState } from './LoadingState';
 

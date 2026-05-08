@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import api from '../../services/api';
+import api from '../../services/apiClient';
 import { useToast } from '../../context/ToastContext';
 import { APP_DISPLAY_NAME } from '../../config/branding';
 

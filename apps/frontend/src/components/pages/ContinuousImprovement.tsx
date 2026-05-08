@@ -6,12 +6,12 @@ import { ModalPortal } from '../common/ModalPortal';
 import { useToast } from '../../context/ToastContext';
 import { useAuth } from '../../context/AuthContext';
 import {
-  improvementApi,
   type ImprovementCheckpointThread,
   type ImprovementEvalCase,
   type ImprovementEvalRun,
   type ImprovementTraceRun,
-} from '../../services/api';
+} from '../../services/apiTypes';
+import { improvementApi } from '../../services/improvementApi';
 
 type ImprovementTab = 'traces' | 'evals' | 'feedback' | 'checkpoints';
 

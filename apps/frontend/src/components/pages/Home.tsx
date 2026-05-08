@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 
 import { Layout } from '../common/Layout';
 import { useAppBranding } from '../../hooks/useAppBranding';
-import api from '../../services/api';
+import api from '../../services/apiClient';
 
 type FileSummary = {
   file_id: number;

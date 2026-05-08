@@ -7,7 +7,7 @@ import { Sidebar } from '../common/Sidebar';
 import { Footer } from '../common/Footer';
 import { ConfirmDeleteModal } from '../common/ConfirmDeleteModal';
 import { useAuth } from '../../context/AuthContext';
-import api from '../../services/api';
+import api from '../../services/apiClient';
 import { queryKeys } from '../../lib/queryClient';
 
 export function Users() {

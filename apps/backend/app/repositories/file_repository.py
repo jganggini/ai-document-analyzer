@@ -8,9 +8,13 @@ from importlib import import_module
 from pathlib import Path
 import re
 import time
-import unicodedata
 from typing import Any, TypeVar
 
+from apps.backend.app.repositories.file_repository_keys import (
+    build_lexical_scan_terms,
+    file_lookup_primary_keys,
+    file_lookup_signature,
+)
 from apps.backend.app.repositories.repository_utils import (
     build_file_access_scope_condition,
     build_oracle_text_contains_query,
@@ -28,139 +32,9 @@ from apps.backend.app.repositories.repository_utils import (
 
 T = TypeVar("T")
 
-_LEXICAL_SCAN_TOKEN_RE = re.compile(r"\w+", re.UNICODE)
-_LEXICAL_SCAN_STOPWORDS = {
-    "a",
-    "al",
-    "an",
-    "and",
-    "archivo",
-    "archivos",
-    "con",
-    "cual",
-    "cuales",
-    "de",
-    "del",
-    "documento",
-    "documentos",
-    "el",
-    "en",
-    "esta",
-    "este",
-    "habla",
-    "hablan",
-    "la",
-    "las",
-    "los",
-    "o",
-    "or",
-    "para",
-    "por",
-    "que",
-    "se",
-    "sobre",
-    "the",
-    "un",
-    "una",
-    "y",
-}
-_FILE_LOOKUP_EXTENSION_RE = re.compile(r"\.[A-Za-z0-9]{1,12}$")
-_FILE_LOOKUP_SEPARATOR_RE = re.compile(r"[^0-9a-z]+")
-_FILE_LOOKUP_VOWEL_RE = re.compile(r"[aeiou]")
-
 
 def _load_attr(module_name: str, attr_name: str):
     return getattr(import_module(module_name), attr_name)
-
-
-def _file_lookup_base(value: str | None) -> str:
-    normalized = str(value or "").strip().strip("`\"'")
-    if not normalized:
-        return ""
-    normalized = normalized.replace("\\", "/").rstrip("/")
-    normalized = normalized.rsplit("/", 1)[-1]
-    normalized = _FILE_LOOKUP_EXTENSION_RE.sub("", normalized)
-    normalized = unicodedata.normalize("NFKD", normalized)
-    normalized = "".join(ch for ch in normalized if not unicodedata.combining(ch))
-    return normalized.casefold()
-
-
-def _file_lookup_primary_keys(value: str | None) -> set[str]:
-    base = _file_lookup_base(value)
-    if not base:
-        return set()
-    spaced = " ".join(part for part in _FILE_LOOKUP_SEPARATOR_RE.split(base) if part)
-    compact = _FILE_LOOKUP_SEPARATOR_RE.sub("", base)
-    return {key for key in (spaced, compact) if key}
-
-
-def _file_lookup_signature(value: str | None) -> str:
-    compact = _FILE_LOOKUP_SEPARATOR_RE.sub("", _file_lookup_base(value))
-    if len(compact) < 8:
-        return ""
-    signature = _FILE_LOOKUP_VOWEL_RE.sub("", compact)
-    return signature if len(signature) >= 6 else ""
-
-
-def _normalize_lexical_scan_text(value: str | None) -> str:
-    normalized = unicodedata.normalize("NFKD", str(value or ""))
-    normalized = "".join(ch for ch in normalized if not unicodedata.combining(ch))
-    normalized = normalized.lower()
-    normalized = re.sub(r"[_/\\\-]+", " ", normalized)
-    normalized = re.sub(r"[^\w\s]+", " ", normalized)
-    return " ".join(normalized.split())
-
-
-def _lexical_scan_keys(token: str) -> set[str]:
-    normalized = _normalize_lexical_scan_text(token)
-    if not normalized or " " in normalized:
-        return set()
-    keys = {normalized}
-    if len(normalized) > 4 and normalized.endswith("s"):
-        keys.add(normalized[:-1])
-    for suffix in (
-        "aciones",
-        "acion",
-        "ando",
-        "iendo",
-        "ados",
-        "adas",
-        "idos",
-        "idas",
-        "ado",
-        "ada",
-        "ido",
-        "ida",
-        "ar",
-        "er",
-        "ir",
-    ):
-        if len(normalized) > len(suffix) + 3 and normalized.endswith(suffix):
-            keys.add(normalized[: -len(suffix)])
-            break
-    if len(normalized) > 5 and normalized[-1] in {"a", "e", "o"}:
-        keys.add(normalized[:-1])
-    if normalized.startswith("atras"):
-        keys.add(normalized.replace("atras", "retras", 1))
-    if normalized.startswith("retras"):
-        keys.add(normalized.replace("retras", "atras", 1))
-    return {key for key in keys if len(key) >= 3}
-
-
-def _build_lexical_scan_terms(text: str | None, *, limit: int = 8) -> list[str]:
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for token in _LEXICAL_SCAN_TOKEN_RE.findall(_normalize_lexical_scan_text(text)):
-        if len(token) < 3 or token in _LEXICAL_SCAN_STOPWORDS:
-            continue
-        for key in sorted(_lexical_scan_keys(token), key=lambda item: (len(item), item), reverse=True):
-            if key in seen:
-                continue
-            seen.add(key)
-            ordered.append(key)
-            if len(ordered) >= limit:
-                return ordered
-    return ordered
 
 
 class FileRepository:
@@ -1090,20 +964,20 @@ class FileRepository:
             input_primary_keys: set[str] = set()
             input_signatures: set[str] = set()
             for file_name in safe_file_names:
-                input_primary_keys.update(_file_lookup_primary_keys(file_name))
-                signature = _file_lookup_signature(file_name)
+                input_primary_keys.update(file_lookup_primary_keys(file_name))
+                signature = file_lookup_signature(file_name)
                 if signature:
                     input_signatures.add(signature)
 
             matched_ids: set[int] = set()
             for file_id, stored_file_name in rows:
-                if input_primary_keys & _file_lookup_primary_keys(stored_file_name):
+                if input_primary_keys & file_lookup_primary_keys(stored_file_name):
                     matched_ids.add(file_id)
 
             if input_signatures:
                 rows_by_signature: dict[str, list[int]] = {}
                 for file_id, stored_file_name in rows:
-                    signature = _file_lookup_signature(stored_file_name)
+                    signature = file_lookup_signature(stored_file_name)
                     if not signature:
                         continue
                     rows_by_signature.setdefault(signature, []).append(file_id)
@@ -1157,7 +1031,7 @@ class FileRepository:
         limit: int,
         include_shared: bool,
     ) -> list[dict[str, Any]]:
-        terms = _build_lexical_scan_terms(question)
+        terms = build_lexical_scan_terms(question)
         if not terms:
             return []
         params: dict[str, Any] = {"user_id": int(user_id)}
@@ -1240,7 +1114,7 @@ class FileRepository:
         limit: int,
         include_shared: bool,
     ) -> list[dict[str, Any]]:
-        terms = _build_lexical_scan_terms(question)
+        terms = build_lexical_scan_terms(question)
         if not terms:
             return []
         params: dict[str, Any] = {"user_id": int(user_id)}

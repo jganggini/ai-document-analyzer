@@ -1,6 +1,5 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import api from '../services/api';
 import { queryClient, queryKeys } from '../lib/queryClient';
 
 interface User {
@@ -26,6 +25,33 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+async function requestAuthJson<T>(
+  path: string,
+  options: { method?: string; token?: string | null; body?: Record<string, unknown> } = {}
+): Promise<T> {
+  const response = await fetch(`/api${path}`, {
+    method: options.method || 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(options.token ? { Authorization: `Bearer ${options.token}` } : {}),
+    },
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  });
+  if (!response.ok) {
+    let detail = `HTTP ${response.status}`;
+    try {
+      const payload = await response.json();
+      detail = String(payload?.detail || detail);
+    } catch {
+      // Keep the HTTP status fallback.
+    }
+    const error = new Error(detail) as Error & { response?: { status: number; data: { detail: string } } };
+    error.response = { status: response.status, data: { detail } };
+    throw error;
+  }
+  return response.json() as Promise<T>;
+}
+
 function clearSessionCaches() {
   queryClient.removeQueries({ queryKey: ['chat-conversations'] });
   queryClient.removeQueries({ queryKey: ['chat-messages'] });
@@ -37,7 +63,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const { data: user, isPending: userLoading, isError } = useQuery({
     queryKey: [...queryKeys.users.me, token],
-    queryFn: () => api.get('/user/me', { timeout: 10000 }).then((res) => res.data as User),
+    queryFn: () => requestAuthJson<User>('/user/me', { token }),
     enabled: !!token,
     retry: false,
     staleTime: 5 * 60 * 1000,
@@ -53,8 +79,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [token, userLoading, isError]);
 
   const login = async (username: string, password: string) => {
-    const response = await api.post('/auth/login', { username, password });
-    const { access_token, user: userData } = response.data;
+    const response = await requestAuthJson<{ access_token: string; user: User }>('/auth/login', {
+      method: 'POST',
+      body: { username, password },
+    });
+    const { access_token, user: userData } = response;
     clearSessionCaches();
     queryClient.removeQueries({ queryKey: queryKeys.users.me });
     setToken(access_token);

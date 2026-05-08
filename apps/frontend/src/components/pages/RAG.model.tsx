@@ -1,6 +1,6 @@
 import React from 'react';
 
-import type { UploadPreparationGroup, UploadPreparationItem } from '../../services/api';
+import type { UploadPreparationGroup, UploadPreparationItem } from '../../services/apiTypes';
 export const ITEMS_PER_PAGE = 10;
 export const DEFAULT_UPLOAD_LANGUAGE = 'es';
 export const DEFAULT_UPLOAD_ACCESS = 'private';

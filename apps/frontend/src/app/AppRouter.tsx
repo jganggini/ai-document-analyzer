@@ -5,7 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import { LoadingState } from '../components/common/LoadingState';
 import { useAuth } from '../context/AuthContext';
 import { queryClient, queryKeys } from '../lib/queryClient';
-import api from '../services/api';
+import api from '../services/apiClient';
 import { AuthenticatedRoutes } from './AuthenticatedRoutes';
 import { SetupRoutes } from './SetupRoutes';
 

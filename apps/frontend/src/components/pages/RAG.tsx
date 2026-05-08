@@ -1,31 +1,27 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import { Layout } from '../common/Layout';
 import { ConfirmDeleteModal } from '../common/ConfirmDeleteModal';
 import { LoadingState } from '../common/LoadingState';
 import { ModalPortal } from '../common/ModalPortal';
 import { queryKeys } from '../../lib/queryClient';
 import {
-  metadataApi,
-  ragApi,
   type MetadataUploadSummary,
   type UploadPreparationGroup,
   type UploadPreparationItem,
-} from '../../services/api';
+} from '../../services/apiTypes';
+import { metadataApi } from '../../services/metadataApi';
+import { ragApi } from '../../services/ragApi';
 import { useToast } from '../../context/ToastContext';
 import { useAuth } from '../../context/AuthContext';
 import {
   ACCESS_OPTIONS,
-  cleanPageMarkdownForPreview,
   compactUploadDraftFieldLabelClassName,
   compactUploadDraftSelectClassName,
   countEnabledPreparedItems,
   DEFAULT_UPLOAD_ACCESS,
   DEFAULT_UPLOAD_LANGUAGE,
   DeleteDocumentConfirmMessage,
-  DOCUMENT_MARKDOWN_COMPONENTS,
   documentToolbarButtonClassName,
   formatCountLabel,
   formatUploadGroupKind,
@@ -39,7 +35,6 @@ import {
   mergePreparedGroups,
   normalizeDocumentsPayload,
   normalizeMetadataFileKey,
-  repairLooseMarkdownTables,
   summarizeDocumentsQueue,
   uploadDraftActionButtonClassName,
   uploadDraftControlGridClassName,
@@ -49,6 +44,8 @@ import {
 import type {
   UploadDraftMetadataMatchState,
 } from './RAG.model';
+import { DocumentViewerModal } from './RAGDocumentViewerModal';
+import { EditDocumentModal } from './RAGEditDocumentModal';
 
 export function RAG() {
   const [statusFilter, setStatusFilter] = useState<string>('');
@@ -1591,424 +1588,5 @@ export function RAG() {
         )}
       </div>
     </Layout>
-  );
-}
-
-function EditDocumentModal({
-  docs,
-  onClose,
-  onSave,
-  isSaving,
-}: {
-  docs: any[];
-  onClose: () => void;
-  onSave: (data: any) => void;
-  isSaving: boolean;
-}) {
-  const safeDocs = docs.length > 0 ? docs : [{}];
-  const primaryDoc = safeDocs[0];
-  const isBulkEdit = safeDocs.length > 1;
-  const [accessType, setAccessType] = useState<string>(
-    primaryDoc.access_profiles?.includes('private')
-      ? 'private'
-      : primaryDoc.access_profiles?.includes('all')
-      ? 'all'
-      : 'private'
-  );
-
-  useEffect(() => {
-    setAccessType(
-      primaryDoc.access_profiles?.includes('private')
-        ? 'private'
-        : primaryDoc.access_profiles?.includes('all')
-        ? 'all'
-        : 'private'
-    );
-  }, [primaryDoc]);
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const finalProfiles: string[] = accessType === 'all' ? ['all'] : ['private'];
-    onSave({ access_profiles: finalProfiles });
-  };
-
-  return (
-    <ModalPortal zIndex="z-[300]" className="items-start justify-center p-4">
-      <div
-        className="rounded-2xl shadow-2xl overflow-hidden max-w-md w-full border-0"
-        style={{
-          background: 'rgba(255,255,255,0.72)',
-          backdropFilter: 'blur(20px) saturate(180%)',
-          WebkitBackdropFilter: 'blur(20px) saturate(180%)',
-        }}
-      >
-        <div className="px-5 py-4 flex items-center gap-3 bg-oracle-dark-gray">
-          <div className="min-w-0">
-            <h2 className="text-lg font-semibold text-white">
-              {isBulkEdit ? 'Edit Document Access' : 'Edit Document Access'}
-            </h2>
-            <p
-              className="text-xs text-gray-200 truncate"
-              title={
-                isBulkEdit
-                  ? `${safeDocs.length} selected documents`
-                  : primaryDoc.original_name || primaryDoc.filename
-              }
-            >
-              {isBulkEdit
-                ? `${safeDocs.length} selected documents`
-                : primaryDoc.original_name || primaryDoc.filename}
-            </p>
-          </div>
-          <div className="ml-auto" />
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-1.5 rounded-lg hover:bg-white/10 transition-colors text-gray-200"
-            aria-label="Close edit document modal"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
-
-        <div className="bg-white p-6">
-          <form onSubmit={handleSubmit}>
-          {/* Access Type */}
-          <div className="mb-5">
-            <label className="block text-sm font-medium text-oracle-dark-gray mb-3">Access Type</label>
-            <div className="grid grid-cols-2 gap-2">
-              <label
-                className={`flex flex-col items-center gap-2 p-3 rounded-lg border-2 cursor-pointer transition-all ${
-                  accessType === 'private'
-                    ? 'border-oracle-red bg-oracle-red/5'
-                    : 'border-oracle-border hover:border-oracle-red/50'
-                }`}
-              >
-                <input
-                  type="radio"
-                  name="accessType"
-                  value="private"
-                  checked={accessType === 'private'}
-                  onChange={() => setAccessType('private')}
-                  className="sr-only"
-                />
-                <svg className={`w-6 h-6 ${accessType === 'private' ? 'text-oracle-red' : 'text-oracle-light-gray'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                </svg>
-                <span className={`text-xs font-medium ${accessType === 'private' ? 'text-oracle-red' : 'text-oracle-medium-gray'}`}>Private</span>
-              </label>
-              <label
-                className={`flex flex-col items-center gap-2 p-3 rounded-lg border-2 cursor-pointer transition-all ${
-                  accessType === 'all'
-                    ? 'border-oracle-red bg-oracle-red/5'
-                    : 'border-oracle-border hover:border-oracle-red/50'
-                }`}
-              >
-                <input
-                  type="radio"
-                  name="accessType"
-                  value="all"
-                  checked={accessType === 'all'}
-                  onChange={() => setAccessType('all')}
-                  className="sr-only"
-                />
-                <svg className={`w-6 h-6 ${accessType === 'all' ? 'text-oracle-red' : 'text-oracle-light-gray'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                <span className={`text-xs font-medium ${accessType === 'all' ? 'text-oracle-red' : 'text-oracle-medium-gray'}`}>All Users</span>
-              </label>
-            </div>
-          </div>
-
-          {/* Footer */}
-          <div className="-mx-6 -mb-6 mt-6 flex border-t border-gray-100">
-            <button
-              type="button"
-              onClick={onClose}
-              disabled={isSaving}
-              className="flex-1 py-4 text-sm font-medium text-oracle-medium-gray transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              Cancel
-            </button>
-            <div className="w-px bg-gray-100" />
-            <button
-              type="submit"
-              disabled={isSaving}
-              className="flex-1 bg-oracle-red py-4 text-sm font-semibold text-white transition-colors hover:bg-oracle-red/90 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {isSaving ? 'Saving...' : 'Save'}
-            </button>
-          </div>
-          </form>
-        </div>
-      </div>
-    </ModalPortal>
-  );
-}
-
-function DocumentViewerModal({
-  doc,
-  onClose,
-}: {
-  doc: any;
-  onClose: () => void;
-}) {
-  const [pageImageUrl, setPageImageUrl] = useState<string | null>(null);
-  const [pageImageLoading, setPageImageLoading] = useState(false);
-  const [pageImageError, setPageImageError] = useState<string | null>(null);
-  const [markdownContent, setMarkdownContent] = useState<string>('');
-  const [markdownError, setMarkdownError] = useState<string | null>(null);
-  const [currentPreviewPage, setCurrentPreviewPage] = useState<number>(1);
-  const [loading, setLoading] = useState(true);
-  const { showToast } = useToast();
-
-  const markdownByPage = React.useMemo(() => {
-    const content = String(markdownContent || '');
-    const pageMap = new Map<number, string>();
-    const headingRegex = /^##\s+Page\s+(\d+)\s*$/gim;
-    const matches = Array.from(content.matchAll(headingRegex));
-    if (matches.length === 0) {
-      return pageMap;
-    }
-    for (let index = 0; index < matches.length; index += 1) {
-      const current = matches[index];
-      const next = matches[index + 1];
-      const pageNumber = Number(current[1]);
-      if (Number.isNaN(pageNumber) || pageNumber < 1 || current.index === undefined) continue;
-      const sectionStart = current.index + current[0].length;
-      const sectionEnd = next?.index ?? content.length;
-      const pageSection = content.slice(sectionStart, sectionEnd).trim();
-      pageMap.set(pageNumber, pageSection || '_No content available for this page._');
-    }
-    return pageMap;
-  }, [markdownContent]);
-
-  const totalPages = React.useMemo(() => {
-    const fromDoc = Number(doc?.pages || 0);
-    if (fromDoc > 0) return fromDoc;
-    if (markdownByPage.size === 0) return 1;
-    return Math.max(...Array.from(markdownByPage.keys()));
-  }, [doc?.pages, markdownByPage]);
-
-  const currentPageMarkdown = React.useMemo(() => {
-    if (markdownByPage.size === 0) {
-      return markdownContent;
-    }
-    return markdownByPage.get(currentPreviewPage) || '';
-  }, [markdownByPage, markdownContent, currentPreviewPage]);
-
-  const renderedPageMarkdown = React.useMemo(
-    () => {
-      return cleanPageMarkdownForPreview(repairLooseMarkdownTables(currentPageMarkdown));
-    },
-    [currentPageMarkdown]
-  );
-
-  useEffect(() => {
-    const loadDocument = async () => {
-      setLoading(true);
-      setMarkdownError(null);
-      try {
-        const mdResponse = await ragApi.getDocumentMarkdown(doc.id);
-        const markdown = String(mdResponse.data?.markdown ?? '');
-        setMarkdownContent(markdown);
-      } catch (error: any) {
-        const message =
-          error?.response?.data?.detail ||
-          error?.message ||
-          'Markdown extraction could not be loaded.';
-        setMarkdownContent('');
-        setMarkdownError(String(message));
-        showToast('Failed to load document Markdown', 'error');
-      } finally {
-        setLoading(false);
-      }
-    };
-    loadDocument();
-    setCurrentPreviewPage(1);
-  }, [doc.id]);
-
-  useEffect(() => {
-    setCurrentPreviewPage((prev) => {
-      if (prev < 1) return 1;
-      if (prev > totalPages) return totalPages;
-      return prev;
-    });
-  }, [totalPages]);
-
-  useEffect(() => {
-    let isCancelled = false;
-
-    const loadPageImage = async () => {
-      const fileId = Number(doc?.id);
-      if (!fileId || Number.isNaN(fileId) || currentPreviewPage < 1) {
-        setPageImageUrl(null);
-        setPageImageError('Page image is not available for this document.');
-        return;
-      }
-
-      setPageImageLoading(true);
-      setPageImageError(null);
-      try {
-        const response = await ragApi.getDocumentPageImage(fileId, currentPreviewPage);
-        const dataUri = String(response.data?.data_uri || '').trim();
-        if (!dataUri) {
-          throw new Error('Page image is empty.');
-        }
-        if (!isCancelled) {
-          setPageImageUrl(dataUri);
-        }
-      } catch {
-        if (!isCancelled) {
-          setPageImageUrl(null);
-          setPageImageError('No se pudo cargar la imagen renderizada de esta pagina.');
-        }
-      } finally {
-        if (!isCancelled) {
-          setPageImageLoading(false);
-        }
-      }
-    };
-
-    loadPageImage();
-    return () => {
-      isCancelled = true;
-    };
-  }, [doc?.id, currentPreviewPage]);
-
-  const copyMarkdown = () => {
-    if (markdownError) return;
-    navigator.clipboard.writeText(markdownContent);
-    showToast('Markdown copied to clipboard', 'success');
-  };
-
-  return (
-    <ModalPortal zIndex="z-[300]" className="items-start justify-center p-4">
-      <div
-        className="rounded-2xl shadow-2xl border border-white/20 overflow-hidden w-full max-w-6xl h-[84vh] flex flex-col border-0"
-        style={{
-          background: 'rgba(255, 255, 255, 0.72)',
-          backdropFilter: 'blur(20px) saturate(180%)',
-          WebkitBackdropFilter: 'blur(20px) saturate(180%)',
-        }}
-      >
-        <div className="px-5 py-4 flex items-center gap-3 bg-oracle-dark-gray flex-shrink-0">
-          <div className="flex items-center gap-3">
-            <div>
-              <h2 className="text-lg font-semibold text-white">{doc.original_name || doc.filename}</h2>
-              <p className="text-sm text-gray-200">{doc.pages || 0} pages</p>
-            </div>
-          </div>
-          <div className="ml-auto" />
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-lg hover:bg-white/10 transition-colors text-gray-200"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
-
-        {/* Content */}
-        {loading ? (
-          <div className="flex-1 flex items-center justify-center h-full bg-white">
-            <LoadingState size="sm" label="Loading document..." textClassName="text-oracle-medium-gray" />
-          </div>
-        ) : (
-          <div className="flex-1 grid grid-cols-2 gap-0 min-h-0 overflow-hidden">
-            {/* Left: rendered page image */}
-            <div className="flex flex-col border-r border-oracle-border overflow-hidden">
-              <div className="flex items-center justify-between py-2 px-4 min-h-[46px] border-b border-oracle-border bg-gray-50 flex-shrink-0">
-                <span className="text-sm font-medium text-oracle-dark-gray">Page Image Preview</span>
-                <span className="text-xs text-oracle-light-gray">
-                  Page {currentPreviewPage} / {totalPages}
-                </span>
-              </div>
-              <div className="flex-1 min-h-0 overflow-auto bg-white">
-                {pageImageLoading ? (
-                  <div className="m-4 flex h-[calc(100%-2rem)] min-h-[320px] items-center justify-center rounded-xl border border-dashed border-gray-300 bg-white">
-                    <LoadingState size="sm" label="Loading page image..." textClassName="text-oracle-medium-gray" />
-                  </div>
-                ) : pageImageUrl ? (
-                  <div className="flex min-h-full items-start justify-center bg-white">
-                    <img
-                      src={pageImageUrl}
-                      alt={`Rendered page ${currentPreviewPage}`}
-                      className="block w-full max-w-none bg-white"
-                    />
-                  </div>
-                ) : (
-                  <div className="m-4 flex h-[calc(100%-2rem)] min-h-[320px] items-center justify-center rounded-xl border border-dashed border-gray-300 bg-white px-6 text-center">
-                    <div>
-                      <p className="text-sm font-medium text-oracle-dark-gray">Preview unavailable</p>
-                      <p className="mt-1 text-xs leading-5 text-oracle-light-gray">
-                        {pageImageError || 'The rendered page image was not generated for this page.'}
-                      </p>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Right: Markdown Viewer */}
-            <div className="flex flex-col overflow-hidden">
-              <div className="flex items-center justify-between py-2 px-4 min-h-[46px] border-b border-oracle-border bg-gray-50 flex-shrink-0">
-                <span className="text-sm font-medium text-oracle-dark-gray">Markdown Content</span>
-                <div className="flex items-center gap-1.5">
-                  <button
-                    onClick={() => setCurrentPreviewPage((prev) => Math.max(1, prev - 1))}
-                    disabled={currentPreviewPage <= 1}
-                    className="p-1.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                    title="Previous page"
-                    aria-label="Previous page"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                    </svg>
-                  </button>
-                  <button
-                    onClick={() => setCurrentPreviewPage((prev) => Math.min(totalPages, prev + 1))}
-                    disabled={currentPreviewPage >= totalPages}
-                    className="p-1.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                    title="Next page"
-                    aria-label="Next page"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                    </svg>
-                  </button>
-                  <button
-                    onClick={copyMarkdown}
-                    disabled={Boolean(markdownError)}
-                    className="p-1.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed"
-                    title="Copy Markdown"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                    </svg>
-                  </button>
-                </div>
-              </div>
-              <div className="flex-1 min-h-0 overflow-auto bg-white p-3">
-                {markdownError ? (
-                  <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm leading-6 text-red-800">
-                    {markdownError}
-                  </div>
-                ) : (
-                  <div className="prose prose-sm max-w-none text-[13px] leading-5 text-oracle-dark-gray [&_h1]:mb-2 [&_h1]:mt-4 [&_h1]:text-lg [&_h1]:font-bold [&_h2]:mb-2 [&_h2]:mt-3 [&_h2]:border-b [&_h2]:border-gray-200 [&_h2]:pb-1 [&_h2]:text-base [&_h2]:font-semibold [&_h3]:mb-2 [&_h3]:mt-0 [&_h3]:border-b [&_h3]:border-gray-200 [&_h3]:pb-1.5 [&_h3]:text-[13px] [&_h3]:font-semibold [&_h3]:uppercase [&_h3]:tracking-wide [&_h3]:text-oracle-medium-gray [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-0.5 [&_strong]:font-semibold [&_code]:rounded [&_code]:bg-gray-100 [&_code]:px-1 [&_code]:text-sm [&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-gray-100 [&_pre]:p-3 [&_pre]:text-sm [&_blockquote]:border-l-4 [&_blockquote]:border-gray-300 [&_blockquote]:pl-4 [&_blockquote]:italic [&_blockquote]:text-gray-600">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={DOCUMENT_MARKDOWN_COMPONENTS}>
-                      {renderedPageMarkdown}
-                    </ReactMarkdown>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-    </ModalPortal>
   );
 }

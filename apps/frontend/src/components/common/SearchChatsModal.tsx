@@ -6,7 +6,8 @@ import { useRAGChat } from '../../context/RAGChatContext';
 import { sortChatConversationsByUpdatedAt } from '../../lib/chatSorting';
 import { queryKeys } from '../../lib/queryClient';
 import { useToast } from '../../context/ToastContext';
-import { chatApi, type ChatConversationSummary } from '../../services/api';
+import { chatApi } from '../../services/chatApi';
+import type { ChatConversationSummary } from '../../services/apiTypes';
 import { GlassModal } from './GlassModal';
 import { LoadingState } from './LoadingState';
 

@@ -4,7 +4,7 @@ import { LoadingState } from '../common/LoadingState';
 import { Sidebar } from '../common/Sidebar';
 import { Footer } from '../common/Footer';
 import { useAuth } from '../../context/AuthContext';
-import api from '../../services/api';
+import api from '../../services/apiClient';
 
 export function Profile() {
   useAuth();

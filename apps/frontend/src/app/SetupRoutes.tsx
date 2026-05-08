@@ -1,6 +1,11 @@
+import { lazy, Suspense } from 'react';
 import { Navigate, Route } from 'react-router-dom';
 
-import { SetupWizard } from '../components/wizard/SetupWizard';
+import { LoadingState } from '../components/common/LoadingState';
+
+const SetupWizard = lazy(() =>
+  import('../components/wizard/SetupWizard').then((module) => ({ default: module.SetupWizard }))
+);
 
 type SetupRoutesProps = {
   onSetupComplete: () => void;
@@ -9,7 +14,14 @@ type SetupRoutesProps = {
 export function SetupRoutes({ onSetupComplete }: SetupRoutesProps) {
   return (
     <>
-      <Route path="/setup" element={<SetupWizard onSetupComplete={onSetupComplete} />} />
+      <Route
+        path="/setup"
+        element={
+          <Suspense fallback={<LoadingState size="sm" label="Loading..." />}>
+            <SetupWizard onSetupComplete={onSetupComplete} />
+          </Suspense>
+        }
+      />
       <Route path="*" element={<Navigate to="/setup" replace />} />
     </>
   );

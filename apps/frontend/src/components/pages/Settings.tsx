@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Layout } from '../common/Layout';
 import { ConfirmModal } from '../common/ConfirmModal';
 import { LoadingState } from '../common/LoadingState';
-import { settingsApi } from '../../services/api';
+import { settingsApi } from '../../services/settingsApi';
 import { useToast } from '../../context/ToastContext';
 import { DEFAULT_APP_DISPLAY_NAME } from '../../config/branding';
 import { appBrandingQueryKey } from '../../hooks/useAppBranding';

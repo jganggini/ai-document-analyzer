@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 
 import { SearchChatsModal } from '../components/common/SearchChatsModal';
+import { AppBrandingProvider } from '../context/AppBrandingContext';
 import { useAuth } from '../context/AuthContext';
 import { RAGChatProvider } from '../context/RAGChatContext';
 import { useAppBranding } from '../hooks/useAppBranding';
@@ -16,9 +17,11 @@ export function SessionScopedApp() {
   }, [appName]);
 
   return (
-    <RAGChatProvider key={String(sessionScope)}>
-      <AppRouter />
-      <SearchChatsModal />
-    </RAGChatProvider>
+    <AppBrandingProvider appName={appName}>
+      <RAGChatProvider key={String(sessionScope)}>
+        <AppRouter />
+        <SearchChatsModal />
+      </RAGChatProvider>
+    </AppBrandingProvider>
   );
 }

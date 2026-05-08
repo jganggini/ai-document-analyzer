@@ -1,5 +1,4 @@
-import { APP_DISPLAY_NAME } from '../../config/branding';
-import { useAppBranding } from '../../hooks/useAppBranding';
+import { useResolvedAppName } from '../../context/AppBrandingContext';
 
 type AppBrandProps = {
   className?: string;
@@ -16,8 +15,8 @@ export function AppBrand({
   titleClassName = 'text-xl font-semibold',
   dividerClassName = 'h-8 bg-white opacity-30',
 }: AppBrandProps) {
-  const { appName } = useAppBranding();
-  const resolvedTitle = title ?? appName ?? APP_DISPLAY_NAME;
+  const appName = useResolvedAppName();
+  const resolvedTitle = title ?? appName;
 
   return (
     <div className={`flex items-center gap-4 ${className}`}>

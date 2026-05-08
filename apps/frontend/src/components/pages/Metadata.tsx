@@ -10,10 +10,10 @@ import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { queryKeys } from '../../lib/queryClient';
 import {
-  metadataApi,
   type MetadataUploadDetailResponse,
   type MetadataUploadSummary,
-} from '../../services/api';
+} from '../../services/apiTypes';
+import { metadataApi } from '../../services/metadataApi';
 
 function normalizeStatus(value: string): 'active' | 'archived' {
   return String(value || '').toLowerCase() === 'archived' ? 'archived' : 'active';

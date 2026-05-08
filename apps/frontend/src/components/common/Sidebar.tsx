@@ -5,7 +5,8 @@ import { useAuth } from '../../context/AuthContext';
 import { useRAGChat } from '../../context/RAGChatContext';
 import { sortChatConversationsByUpdatedAt } from '../../lib/chatSorting';
 import { queryKeys } from '../../lib/queryClient';
-import { chatApi, type ChatConversationSummary } from '../../services/api';
+import { chatApi } from '../../services/chatApi';
+import type { ChatConversationSummary } from '../../services/apiTypes';
 
 interface SidebarProps {
   collapsed: boolean;
