@@ -7,7 +7,7 @@ import re
 import unicodedata
 from typing import Literal
 
-from apps.backend.app.services.metadata_upload_service import canonicalize_file_key
+from apps.backend.app.services.metadata_keys import canonicalize_file_key
 
 _FILE_EXTENSION_PATTERN = re.compile(r"\.(?:zip|pdf)\b", re.IGNORECASE)
 _WHITESPACE_PATTERN = re.compile(r"\s+")

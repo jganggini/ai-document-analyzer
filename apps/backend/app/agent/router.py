@@ -8,7 +8,7 @@ from typing import Callable, Literal
 
 from pydantic import BaseModel, Field
 
-from apps.backend.app.api.contracts.questions import EvidenceItem
+from apps.backend.app.contracts.questions import EvidenceItem
 from apps.backend.app.agent.contracts import LLMResult, serialize_evidence
 from apps.backend.app.integrations.generative_ai import OCIGenerativeAIService
 from apps.backend.app.rag.display_text import repair_document_file_name

@@ -7,10 +7,8 @@ from typing import Any, Literal
 
 from typing_extensions import NotRequired, TypedDict
 
-from apps.backend.app.api.contracts.questions import EvidenceItem
-from apps.backend.app.agent.contracts import LLMResult
-from apps.backend.app.agent.tools.hybrid_answer_tool import HybridAnswerResult
-from apps.backend.app.agent.tools.multimodal_tool import VisualInspectionResult
+from apps.backend.app.contracts.questions import EvidenceItem
+from apps.backend.app.agent.contracts import HybridAnswerResult, LLMResult, VisualInspectionResult
 
 
 class QAGraphState(TypedDict):

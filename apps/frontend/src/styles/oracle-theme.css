@@ -119,6 +119,27 @@ body {
     linear-gradient(135deg, var(--app-bg-start) 0%, var(--app-bg-mid) 48%, var(--app-bg-end) 100%);
 }
 
+.setup-shell-light {
+  position: relative;
+  isolation: isolate;
+  overflow-x: hidden;
+}
+
+.setup-shell-light .app-footer {
+  border-top-color: var(--oracle-border);
+  background: rgba(255, 255, 255, 0.96);
+  color: var(--oracle-medium-gray);
+  box-shadow: 0 -10px 32px rgba(49, 45, 42, 0.08);
+}
+
+.setup-shell-light .app-footer > span {
+  color: var(--oracle-medium-gray);
+}
+
+.setup-shell-light .app-footer .mx-2 {
+  color: rgba(77, 77, 77, 0.38) !important;
+}
+
 .app-shell-dark::before,
 .setup-shell-dark::before,
 .app-shell-dark::after,

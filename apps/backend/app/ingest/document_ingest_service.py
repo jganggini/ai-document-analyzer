@@ -6,40 +6,27 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from functools import lru_cache
+from importlib import import_module
 import json
 from pathlib import Path
 from threading import Lock
 import time
-from typing import Callable, Iterator, TypeVar
+from typing import Any, Callable, Iterator, TypeVar
 
-from apps.backend.app.api.contracts.files import FileProcessItem
-from apps.backend.app.core.config import Settings, get_settings
-from apps.backend.app.core.database import DatabaseManager
+from apps.backend.app.contracts.files import FileProcessItem
 from apps.backend.app.core.hashing import sha256_file
-from apps.backend.app.core.session import get_db_manager
-from apps.backend.app.ingest.archive_service import ArchiveService
-from apps.backend.app.ingest.docling_document_service import (
-    DoclingDocumentService,
-    DoclingPageResult,
-)
 from apps.backend.app.ingest.document_metadata import (
     FileMetadata,
     FileMetadataClassifier,
     extract_document_code_from_filename,
     normalize_document_code_value,
 )
-from apps.backend.app.ingest.rag_enrichment import (
-    DocumentFactExtractor,
-    PageVisualEnricher,
+from apps.backend.app.ingest.text_utils import (
     build_document_search_text,
     build_page_search_text,
     compact_whitespace,
 )
-from apps.backend.app.ingest.pdf_service import PDFService
-from apps.backend.app.rag.embedding_service import EmbeddingService
-from apps.backend.app.repositories.file_repository import FileRepository
-from apps.backend.app.services.metadata_upload_service import (
+from apps.backend.app.services.metadata_keys import (
     build_metadata_search_text,
     canonicalize_file_key,
     normalize_metadata_attribute_key,
@@ -51,9 +38,12 @@ from apps.backend.app.storage.object_keys import (
     build_pdf_source_key,
     build_zip_source_key,
 )
-from apps.backend.app.storage.object_storage_service import ObjectStorageService
 
 T = TypeVar("T")
+
+
+def _load_attr(module_name: str, attr_name: str):
+    return getattr(import_module(module_name), attr_name)
 
 
 @dataclass(slots=True)
@@ -66,14 +56,23 @@ class IngestionService:
     def __init__(
         self,
         *,
-        settings: Settings,
-        db_manager: DatabaseManager | None = None,
-        archive_service: ArchiveService,
-        pdf_service: PDFService,
+        settings: Any,
+        db_manager: Any | None = None,
+        archive_service: Any,
+        pdf_service: Any,
         docling_document_service: DoclingDocumentService | None = None,
-        embedding_service: EmbeddingService,
-        object_storage: ObjectStorageService,
+        embedding_service: Any,
+        object_storage: Any,
     ) -> None:
+        DoclingDocumentService = _load_attr(
+            "apps.backend.app.ingest.docling_document_service",
+            "DoclingDocumentService",
+        )
+        PageVisualEnricher = _load_attr("apps.backend.app.ingest.rag_enrichment", "PageVisualEnricher")
+        DocumentFactExtractor = _load_attr(
+            "apps.backend.app.ingest.rag_enrichment",
+            "DocumentFactExtractor",
+        )
         self.settings = settings
         self.db_manager = db_manager
         self.archive_service = archive_service
@@ -81,7 +80,10 @@ class IngestionService:
         self.docling_document_service = docling_document_service or DoclingDocumentService(settings)
         self.embedding_service = embedding_service
         self.object_storage = object_storage
-        self.repository = FileRepository(db_manager) if db_manager is not None else None
+        self.repository = None
+        if db_manager is not None:
+            FileRepository = _load_attr("apps.backend.app.repositories.file_repository", "FileRepository")
+            self.repository = FileRepository(db_manager)
         self.file_metadata_classifier = FileMetadataClassifier(
             settings=settings,
             db_manager=db_manager,
@@ -1379,16 +1381,6 @@ class IngestionService:
             raise ValueError(f"Invalid PDF header for '{pdf_path.name}'")
 
 
-@lru_cache(maxsize=1)
 def get_ingestion_service() -> IngestionService:
-    settings = get_settings()
-    db_manager = get_db_manager()
-    return IngestionService(
-        settings=settings,
-        db_manager=db_manager,
-        archive_service=ArchiveService(settings),
-        pdf_service=PDFService(settings),
-        docling_document_service=DoclingDocumentService(settings),
-        embedding_service=EmbeddingService(settings),
-        object_storage=ObjectStorageService(settings),
-    )
+    factory = import_module("apps.backend.app.ingest.ingestion_factory")
+    return factory.get_ingestion_service()

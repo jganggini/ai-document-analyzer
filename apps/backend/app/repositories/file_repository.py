@@ -4,21 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime
+from importlib import import_module
 from pathlib import Path
 import re
 import time
 import unicodedata
 from typing import Any, TypeVar
 
-from apps.backend.app.core.config import get_settings
-from apps.backend.app.core.database import DatabaseManager
-from apps.backend.app.repositories.archive_metadata_repository import ArchiveMetadataRepository
-from apps.backend.app.repositories.chat_conversations_repository import QAConversationsRepository
-from apps.backend.app.repositories.chat_turns_repository import QASessionsRepository
-from apps.backend.app.repositories.document_facts_repository import DocumentFactsRepository
-from apps.backend.app.repositories.document_embeddings_repository import PageEmbeddingsRepository
-from apps.backend.app.repositories.document_pages_repository import FilePagesRepository
-from apps.backend.app.repositories.file_embeddings_repository import FileEmbeddingsRepository
 from apps.backend.app.repositories.repository_utils import (
     build_file_access_scope_condition,
     build_oracle_text_contains_query,
@@ -75,6 +67,10 @@ _LEXICAL_SCAN_STOPWORDS = {
 _FILE_LOOKUP_EXTENSION_RE = re.compile(r"\.[A-Za-z0-9]{1,12}$")
 _FILE_LOOKUP_SEPARATOR_RE = re.compile(r"[^0-9a-z]+")
 _FILE_LOOKUP_VOWEL_RE = re.compile(r"[aeiou]")
+
+
+def _load_attr(module_name: str, attr_name: str):
+    return getattr(import_module(module_name), attr_name)
 
 
 def _file_lookup_base(value: str | None) -> str:
@@ -168,7 +164,35 @@ def _build_lexical_scan_terms(text: str | None, *, limit: int = 8) -> list[str]:
 
 
 class FileRepository:
-    def __init__(self, db_manager: DatabaseManager) -> None:
+    def __init__(self, db_manager: Any) -> None:
+        FilePagesRepository = _load_attr(
+            "apps.backend.app.repositories.document_pages_repository",
+            "FilePagesRepository",
+        )
+        PageEmbeddingsRepository = _load_attr(
+            "apps.backend.app.repositories.document_embeddings_repository",
+            "PageEmbeddingsRepository",
+        )
+        FileEmbeddingsRepository = _load_attr(
+            "apps.backend.app.repositories.file_embeddings_repository",
+            "FileEmbeddingsRepository",
+        )
+        DocumentFactsRepository = _load_attr(
+            "apps.backend.app.repositories.document_facts_repository",
+            "DocumentFactsRepository",
+        )
+        ArchiveMetadataRepository = _load_attr(
+            "apps.backend.app.repositories.archive_metadata_repository",
+            "ArchiveMetadataRepository",
+        )
+        QAConversationsRepository = _load_attr(
+            "apps.backend.app.repositories.chat_conversations_repository",
+            "QAConversationsRepository",
+        )
+        QASessionsRepository = _load_attr(
+            "apps.backend.app.repositories.chat_turns_repository",
+            "QASessionsRepository",
+        )
         self.db_manager = db_manager
         self.file_pages = FilePagesRepository(db_manager)
         self.page_embeddings = PageEmbeddingsRepository(db_manager)
@@ -208,6 +232,7 @@ class FileRepository:
         except Exception:
             return False
         try:
+            get_settings = _load_attr("apps.backend.app.core.config", "get_settings")
             extracted_root = get_settings().extracted_path
         except Exception:
             return False

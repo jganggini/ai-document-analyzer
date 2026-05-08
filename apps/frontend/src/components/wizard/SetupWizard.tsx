@@ -60,22 +60,14 @@ export function SetupWizard({ onSetupComplete }: SetupWizardProps) {
   };
 
   return (
-    <div className="setup-shell-dark flex min-h-screen flex-col pb-12">
+    <div className="setup-shell-light flex min-h-screen flex-col bg-oracle-bg-gray pb-12 text-oracle-dark-gray">
       {/* Stepper */}
-      <div className="app-content-layer border-b border-white/10 bg-[#211d1b]/88 shadow-[0_18px_46px_rgba(0,0,0,0.28)] backdrop-blur-xl">
+      <div className="app-content-layer border-b border-oracle-border bg-white shadow-sm">
         <div className="mx-auto max-w-5xl px-4 py-5 sm:px-6 sm:py-6 lg:px-8">
-          <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-oracle-red">
-                Application setup
-              </p>
-              <h1 className="mt-1 text-2xl font-semibold tracking-[-0.025em] text-white">
-                Configure AI Document Analyzer
-              </h1>
-            </div>
-            <div className="rounded-full border border-white/10 bg-white/[0.06] px-3 py-1 text-xs font-semibold text-white/68">
-              Step {currentStep} of {STEPS.length}
-            </div>
+          <div className="mb-5">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-oracle-red">
+              Application setup
+            </p>
           </div>
 
           <div className="hidden items-start justify-between md:flex">
@@ -88,7 +80,7 @@ export function SetupWizard({ onSetupComplete }: SetupWizardProps) {
                         ? 'bg-oracle-red text-white'
                         : step.id < currentStep
                         ? 'bg-emerald-600 text-white'
-                        : 'bg-white/10 text-white/48'
+                        : 'bg-gray-100 text-oracle-medium-gray'
                     }`}
                   >
                     {step.id < currentStep ? (
@@ -105,11 +97,11 @@ export function SetupWizard({ onSetupComplete }: SetupWizardProps) {
                       step.id
                     )}
                   </div>
-                  <span className="mt-2 text-center text-sm leading-5 text-white/64">{step.name}</span>
+                  <span className="mt-2 text-center text-sm leading-5 text-oracle-medium-gray">{step.name}</span>
                 </div>
                 {index < STEPS.length - 1 && (
                   <div className="flex min-w-10 flex-1 items-center px-2 pt-5">
-                    <div className={`h-1 w-full rounded-full ${step.id < currentStep ? 'bg-emerald-600' : 'bg-white/10'}`} />
+                    <div className={`h-1 w-full rounded-full ${step.id < currentStep ? 'bg-emerald-600' : 'bg-gray-200'}`} />
                   </div>
                 )}
               </React.Fragment>
@@ -125,8 +117,8 @@ export function SetupWizard({ onSetupComplete }: SetupWizardProps) {
             </div>
             <div className="mt-3 flex items-center justify-between gap-3">
               <div>
-                <p className="text-sm font-semibold text-white">{currentStepInfo.name}</p>
-                <p className="text-xs text-white/50">Complete this step to continue.</p>
+                <p className="text-sm font-semibold text-oracle-dark-gray">{currentStepInfo.name}</p>
+                <p className="text-xs text-oracle-light-gray">Complete this step to continue.</p>
               </div>
               <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-oracle-red text-sm font-semibold text-white">
                 {currentStep}

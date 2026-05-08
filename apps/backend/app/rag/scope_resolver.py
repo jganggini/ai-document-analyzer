@@ -8,7 +8,7 @@ import time
 from typing import Protocol
 import unicodedata
 
-from apps.backend.app.services.metadata_upload_service import canonicalize_file_key
+from apps.backend.app.services.metadata_keys import canonicalize_file_key
 
 CODE_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_-]+", re.UNICODE)
 DOCUMENT_CODE_PATTERN = re.compile(r"^[A-Z]{2,24}[A-Z0-9_-]*\d[A-Z0-9_-]*$")

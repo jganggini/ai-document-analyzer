@@ -8,7 +8,7 @@ import re
 import time
 import unicodedata
 
-from apps.backend.app.api.contracts.questions import EvidenceItem
+from apps.backend.app.contracts.questions import EvidenceItem
 from apps.backend.app.core.config import get_settings
 from apps.backend.app.core.database import DatabaseManager
 from apps.backend.app.rag.embedding_service import EmbeddingService
@@ -20,7 +20,7 @@ from apps.backend.app.rag.retrieval.oracle_vector_search import (
     OracleVectorStore,
 )
 from apps.backend.app.repositories.file_repository import FileRepository
-from apps.backend.app.services.metadata_upload_service import canonicalize_file_key
+from apps.backend.app.services.metadata_keys import canonicalize_file_key
 
 TOKEN_PATTERN = re.compile(r"\w+", re.UNICODE)
 EXPLICIT_FILE_REFERENCE_PATTERN = re.compile(

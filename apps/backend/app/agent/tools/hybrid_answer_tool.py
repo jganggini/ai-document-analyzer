@@ -2,25 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import re
+from typing import Any
 import unicodedata
 
-from apps.backend.app.api.contracts.questions import EvidenceItem
+from apps.backend.app.contracts.questions import EvidenceItem
 from apps.backend.app.core.config import Settings
-from apps.backend.app.agent.contracts import LLMResult
-from apps.backend.app.agent.tools.multimodal_tool import PageVisionTool, VisualInspectionResult
+from apps.backend.app.agent.contracts import HybridAnswerResult, LLMResult, VisualInspectionResult
 from apps.backend.app.rag.retrieval.query_service import question_requests_full_document_coverage
-
-
-@dataclass(slots=True)
-class HybridAnswerResult:
-    llm_result: LLMResult
-    answer_mode: str
-    visual_confirmation_used: bool
-    analyzed_pages: list[int]
-    confidence_notes: list[str]
-    ocr_vs_visual_discrepancies: list[str]
 
 
 class HybridAnswerTool:
@@ -47,7 +36,7 @@ class HybridAnswerTool:
         self,
         *,
         settings: Settings,
-        page_vision_tool: PageVisionTool,
+        page_vision_tool: Any,
         synthesis_agent,
         **data,
     ) -> None:

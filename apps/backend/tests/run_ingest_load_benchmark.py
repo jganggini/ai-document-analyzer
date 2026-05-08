@@ -18,7 +18,7 @@ if str(ROOT) not in sys.path:
 
 from apps.backend.app.core.config import get_settings
 from apps.backend.app.core.database import DatabaseManager
-from apps.backend.app.ingest.document_ingest_service import get_ingestion_service
+from apps.backend.app.ingest.ingestion_factory import get_ingestion_service
 
 
 TABLE_NAMES = (

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from apps.backend.app.api.contracts.questions import EvidenceItem
+from apps.backend.app.contracts.questions import EvidenceItem
 from apps.backend.app.core.config import Settings
+from apps.backend.app.agent.contracts import VisualInspectionResult
 from apps.backend.app.integrations.generative_ai import OCIGenerativeAIService
 from apps.backend.app.services.runtime_config_service import ConfigService
 from apps.backend.app.storage.object_storage_service import ObjectStorageService
@@ -16,15 +17,6 @@ class VisualPageFinding:
     page_number: int
     answer_candidate: str
     observed_text: str
-    confidence_notes: list[str]
-    ocr_vs_visual_discrepancies: list[str]
-
-
-@dataclass(slots=True)
-class VisualInspectionResult:
-    used: bool
-    analyzed_pages: list[int]
-    visual_context: str
     confidence_notes: list[str]
     ocr_vs_visual_discrepancies: list[str]
 

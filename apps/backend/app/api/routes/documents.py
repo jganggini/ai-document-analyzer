@@ -11,7 +11,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 
-from apps.backend.app.api.contracts.files import (
+from apps.backend.app.contracts.files import (
     FileAccessUpdateRequest,
     FileBulkAccessUpdateRequest,
     FileBulkDeleteRequest,

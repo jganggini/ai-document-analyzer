@@ -10,7 +10,7 @@ from typing import Any
 
 from apps.backend.app.core.config import Settings
 from apps.backend.app.ingest.ocr_types import PageOCRResult
-from apps.backend.app.ingest.rag_enrichment import compact_whitespace, normalize_text
+from apps.backend.app.ingest.text_utils import compact_whitespace, normalize_text
 
 
 @dataclass(slots=True)

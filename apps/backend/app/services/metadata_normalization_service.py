@@ -9,7 +9,7 @@ from pathlib import Path
 import unicodedata
 from typing import Any
 
-from apps.backend.app.services.metadata_upload_service import canonicalize_file_key, normalize_metadata_header
+from apps.backend.app.services.metadata_keys import canonicalize_file_key, normalize_metadata_header
 
 
 @dataclass(slots=True)

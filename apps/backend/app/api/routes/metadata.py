@@ -10,7 +10,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
 
-from apps.backend.app.api.contracts.metadata import (
+from apps.backend.app.contracts.metadata import (
     MetadataUploadDetailResponse,
     MetadataUploadListResponse,
     MetadataUploadMatchSummary,

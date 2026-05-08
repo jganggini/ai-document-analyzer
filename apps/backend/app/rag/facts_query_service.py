@@ -9,12 +9,12 @@ import json
 import re
 import unicodedata
 
-from apps.backend.app.ingest.rag_enrichment import parse_date_value
+from apps.backend.app.ingest.text_utils import parse_date_value
 from apps.backend.app.repositories.document_facts_repository import DocumentFactsRepository
 from apps.backend.app.repositories.repository_utils import code_to_status
 from apps.backend.app.rag.display_text import repair_document_file_name
 from apps.backend.app.rag.scope_resolver import ScopeResolutionError, extract_candidate_archive_slugs_from_question
-from apps.backend.app.services.metadata_upload_service import canonicalize_file_key
+from apps.backend.app.services.metadata_keys import canonicalize_file_key
 
 _METADATA_TOKEN_PATTERN = re.compile(r"\w+", re.UNICODE)
 _METADATA_STOPWORDS = {

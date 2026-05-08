@@ -6,7 +6,7 @@ import json
 
 from pydantic import BaseModel, Field
 
-from apps.backend.app.api.contracts.questions import EvidenceItem
+from apps.backend.app.contracts.questions import EvidenceItem
 from apps.backend.app.rag.retrieval.query_service import RetrievalPipelineService, RetrievalResult
 
 

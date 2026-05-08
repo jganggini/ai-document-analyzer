@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from importlib import import_module
 from pathlib import Path
 
 from pydantic import model_validator
@@ -163,10 +164,16 @@ class Settings(BaseSettings):
 
     def _runtime_config_int(self, key: str, default_value: int) -> int:
         try:
-            from apps.backend.app.core.session import get_db_manager
-            from apps.backend.app.services.runtime_config_service import ConfigService
+            DatabaseManager = getattr(import_module("apps.backend.app.core.database"), "DatabaseManager")
+            ConfigService = getattr(
+                import_module("apps.backend.app.services.runtime_config_service"),
+                "ConfigService",
+            )
 
-            raw_value = ConfigService(get_db_manager()).get_value(key, str(default_value)).strip()
+            raw_value = ConfigService(DatabaseManager.get_instance(self)).get_value(
+                key,
+                str(default_value),
+            ).strip()
             return int(raw_value)
         except Exception:
             return int(default_value)

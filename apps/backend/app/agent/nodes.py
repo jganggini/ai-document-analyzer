@@ -5,23 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 from time import perf_counter
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from apps.backend.app.api.contracts.questions import EvidenceItem
-from apps.backend.app.agent.contracts import LLMResult
-from apps.backend.app.agent.router import GraphIntentRouter, GraphSearchResponder
+from apps.backend.app.contracts.questions import EvidenceItem
+from apps.backend.app.agent.contracts import HybridAnswerResult, LLMResult, VisualInspectionResult
 from apps.backend.app.agent.state import QAGraphState
-from apps.backend.app.agent.tools.hybrid_answer_tool import HybridAnswerResult, HybridAnswerTool
-from apps.backend.app.agent.tools.multimodal_tool import PageVisionTool, VisualInspectionResult
-from apps.backend.app.agent.tools.oracle_retrieval_tool import OracleRetrievalTool
-from apps.backend.app.rag.facts_query_service import QuestionFactResolver
-from apps.backend.app.rag.question_classifier import QuestionClassifier
-from apps.backend.app.rag.scope_resolver import QuestionScopeResolver
-from apps.backend.app.repositories.file_repository import FileRepository
-
-if TYPE_CHECKING:
-    from apps.backend.app.agent.agents import AnalysisAgent, SupervisorAgent
-
 
 _METADATA_DOCUMENT_MIN_CANDIDATE_K = 80
 _METADATA_DOCUMENT_MIN_PAGES_PER_DOC = 2
@@ -141,17 +129,17 @@ def _resolve_retrieval_controls(state: QAGraphState) -> _RetrievalControls:
 
 @dataclass(slots=True)
 class QAGraphNodes:
-    intent_router: GraphIntentRouter
-    casual_responder: GraphSearchResponder
-    supervisor: SupervisorAgent
-    scope_resolver: QuestionScopeResolver
-    question_classifier: QuestionClassifier
-    fact_resolver: QuestionFactResolver
-    retrieval_tool: OracleRetrievalTool
-    analysis_agent: AnalysisAgent
-    hybrid_answer_tool: HybridAnswerTool
-    page_vision_tool: PageVisionTool
-    repository: FileRepository
+    intent_router: Any
+    casual_responder: Any
+    supervisor: Any
+    scope_resolver: Any
+    question_classifier: Any
+    fact_resolver: Any
+    retrieval_tool: Any
+    analysis_agent: Any
+    hybrid_answer_tool: Any
+    page_vision_tool: Any
+    repository: Any
 
     @staticmethod
     def _build_conversation_scoped_question(

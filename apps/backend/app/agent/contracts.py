@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from apps.backend.app.api.contracts.questions import EvidenceItem
+from apps.backend.app.contracts.questions import EvidenceItem
 
 
 @dataclass(slots=True)
@@ -16,6 +16,40 @@ class LLMResult:
     obligations: list[str]
     citation_source_numbers: list[int]
     model_used: str
+
+
+@dataclass(slots=True)
+class VisualInspectionResult:
+    used: bool
+    analyzed_pages: list[int]
+    visual_context: str
+    confidence_notes: list[str]
+    ocr_vs_visual_discrepancies: list[str]
+
+
+@dataclass(slots=True)
+class HybridAnswerResult:
+    llm_result: LLMResult
+    answer_mode: str
+    visual_confirmation_used: bool
+    analyzed_pages: list[int]
+    confidence_notes: list[str]
+    ocr_vs_visual_discrepancies: list[str]
+
+
+@dataclass(slots=True)
+class QueryExecutionResult:
+    strategy: str
+    selected_provider: str
+    evidence: list[EvidenceItem]
+    answer: LLMResult
+    answer_mode: str
+    visual_confirmation_used: bool
+    analyzed_pages: list[int]
+    confidence_notes: list[str]
+    ocr_vs_visual_discrepancies: list[str]
+    thread_id: str = ""
+    telemetry: dict[str, object] = field(default_factory=dict)
 
 
 def serialize_evidence(evidence: list[EvidenceItem]) -> str:

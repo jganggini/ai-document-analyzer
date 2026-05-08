@@ -8,7 +8,7 @@ from collections.abc import Iterator
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
-from apps.backend.app.api.contracts.questions import (
+from apps.backend.app.contracts.questions import (
     AskQuestionRequest,
     AskQuestionResponse,
     CitationItem,
@@ -28,7 +28,7 @@ from apps.backend.app.agent.service import get_qa_graph_service
 from apps.backend.app.rag.query_selectors import build_effective_selector_question, merge_question_selectors
 from apps.backend.app.rag.scope_resolver import ScopeResolutionError
 from apps.backend.app.repositories.file_repository import FileRepository
-from apps.backend.app.services.metadata_upload_service import canonicalize_file_key
+from apps.backend.app.services.metadata_keys import canonicalize_file_key
 
 router = APIRouter(
     prefix="/questions",

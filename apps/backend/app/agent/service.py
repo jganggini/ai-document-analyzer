@@ -5,37 +5,13 @@ from __future__ import annotations
 from dataclasses import asdict, is_dataclass
 from datetime import date, datetime, timezone
 from functools import lru_cache
+from importlib import import_module
 import uuid
 from typing import Any, Iterator
 
-from apps.backend.app.api.contracts.questions import EvidenceItem
-from apps.backend.app.core.config import get_settings
+from apps.backend.app.contracts.questions import EvidenceItem
 from apps.backend.app.core.tracing import checkpoint
-from apps.backend.app.core.session import get_db_manager
-from apps.backend.app.agent.agents import (
-    AnalysisAgent,
-    QueryExecutionResult,
-    SupervisorAgent,
-    SynthesisAgent,
-)
-from apps.backend.app.agent.contracts import LLMResult
-from apps.backend.app.agent.document_graph import build_qa_graph
-from apps.backend.app.agent.memory.checkpointer_oracle import OracleLangGraphCheckpointer
-from apps.backend.app.agent.nodes import QAGraphNodes
-from apps.backend.app.agent.router import GraphIntentRouter, GraphSearchResponder
-from apps.backend.app.agent.tools.hybrid_answer_tool import HybridAnswerTool
-from apps.backend.app.agent.tools.multimodal_tool import PageVisionTool
-from apps.backend.app.agent.tools.oracle_retrieval_tool import OracleRetrievalTool
-from apps.backend.app.integrations.generative_ai import OCIGenerativeAIService
-from apps.backend.app.rag.embedding_service import EmbeddingService
-from apps.backend.app.rag.facts_query_service import QuestionFactResolver
-from apps.backend.app.rag.question_classifier import QuestionClassifier
-from apps.backend.app.rag.scope_resolver import QuestionScopeResolver
-from apps.backend.app.rag.retrieval.query_service import RetrievalPipelineService
-from apps.backend.app.rag.reranker_service import HybridLocalOnnxRerankService
-from apps.backend.app.repositories.file_repository import FileRepository
-from apps.backend.app.repositories.qa_trace_repository import QATraceRepository
-from apps.backend.app.services.runtime_config_service import ConfigService
+from apps.backend.app.agent.contracts import LLMResult, QueryExecutionResult
 
 SEARCH_REASONING_STAGES: list[dict[str, Any]] = [
     {"key": "classify_intent", "label": "Classifying intent", "starts_at_seconds": 0},
@@ -89,7 +65,7 @@ GRAPH_EDGES: list[dict[str, str]] = [
 class QAGraphService:
     """QA entrypoint backed by a LangGraph workflow."""
 
-    def __init__(self, *, graph, trace_repository: QATraceRepository | None = None) -> None:
+    def __init__(self, *, graph, trace_repository: Any | None = None) -> None:
         self._graph = graph
         self._trace_repository = trace_repository
 
@@ -845,8 +821,64 @@ class QAGraphService:
             }
 
 
+def _load_attr(module_name: str, attr_name: str) -> Any:
+    # Keep graph assembly dependencies out of the service module import path.
+    return getattr(import_module(module_name), attr_name)
+
+
 @lru_cache(maxsize=1)
 def get_qa_graph_service() -> QAGraphService:
+    get_settings = _load_attr("apps.backend.app.core.config", "get_settings")
+    get_db_manager = _load_attr("apps.backend.app.core.session", "get_db_manager")
+    AnalysisAgent = _load_attr("apps.backend.app.agent.agents", "AnalysisAgent")
+    SupervisorAgent = _load_attr("apps.backend.app.agent.agents", "SupervisorAgent")
+    SynthesisAgent = _load_attr("apps.backend.app.agent.agents", "SynthesisAgent")
+    build_qa_graph = _load_attr("apps.backend.app.agent.document_graph", "build_qa_graph")
+    OracleLangGraphCheckpointer = _load_attr(
+        "apps.backend.app.agent.memory.checkpointer_oracle",
+        "OracleLangGraphCheckpointer",
+    )
+    QAGraphNodes = _load_attr("apps.backend.app.agent.nodes", "QAGraphNodes")
+    GraphIntentRouter = _load_attr("apps.backend.app.agent.router", "GraphIntentRouter")
+    GraphSearchResponder = _load_attr("apps.backend.app.agent.router", "GraphSearchResponder")
+    HybridAnswerTool = _load_attr(
+        "apps.backend.app.agent.tools.hybrid_answer_tool",
+        "HybridAnswerTool",
+    )
+    PageVisionTool = _load_attr("apps.backend.app.agent.tools.multimodal_tool", "PageVisionTool")
+    OracleRetrievalTool = _load_attr(
+        "apps.backend.app.agent.tools.oracle_retrieval_tool",
+        "OracleRetrievalTool",
+    )
+    OCIGenerativeAIService = _load_attr(
+        "apps.backend.app.integrations.generative_ai",
+        "OCIGenerativeAIService",
+    )
+    EmbeddingService = _load_attr("apps.backend.app.rag.embedding_service", "EmbeddingService")
+    QuestionFactResolver = _load_attr(
+        "apps.backend.app.rag.facts_query_service",
+        "QuestionFactResolver",
+    )
+    QuestionClassifier = _load_attr("apps.backend.app.rag.question_classifier", "QuestionClassifier")
+    QuestionScopeResolver = _load_attr("apps.backend.app.rag.scope_resolver", "QuestionScopeResolver")
+    RetrievalPipelineService = _load_attr(
+        "apps.backend.app.rag.retrieval.query_service",
+        "RetrievalPipelineService",
+    )
+    HybridLocalOnnxRerankService = _load_attr(
+        "apps.backend.app.rag.reranker_service",
+        "HybridLocalOnnxRerankService",
+    )
+    FileRepository = _load_attr("apps.backend.app.repositories.file_repository", "FileRepository")
+    QATraceRepository = _load_attr(
+        "apps.backend.app.repositories.qa_trace_repository",
+        "QATraceRepository",
+    )
+    ConfigService = _load_attr(
+        "apps.backend.app.services.runtime_config_service",
+        "ConfigService",
+    )
+
     settings = get_settings()
     db_manager = get_db_manager()
     config_service = ConfigService(db_manager)

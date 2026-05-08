@@ -11,7 +11,7 @@ import numpy as np
 from onnxruntime import InferenceSession
 from tokenizers import Tokenizer
 
-from apps.backend.app.api.contracts.questions import EvidenceItem
+from apps.backend.app.contracts.questions import EvidenceItem
 from apps.backend.app.core.config import Settings
 
 logger = logging.getLogger(__name__)

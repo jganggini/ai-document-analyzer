@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 
-from apps.backend.app.api.contracts.chats import (
+from apps.backend.app.contracts.chats import (
     ConversationListResponse,
     ConversationMessage,
     ConversationMessagesResponse,

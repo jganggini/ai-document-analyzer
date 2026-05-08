@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
+from typing import Any
 
-from apps.backend.app.api.contracts.questions import EvidenceItem
+from apps.backend.app.contracts.questions import EvidenceItem
 from apps.backend.app.core.config import Settings, get_settings
-from apps.backend.app.agent.contracts import LLMResult
+from apps.backend.app.agent.contracts import LLMResult, QueryExecutionResult
 from apps.backend.app.agent.router import (
     GraphCollaboration,
     GraphIntentRouter,
@@ -16,11 +16,6 @@ from apps.backend.app.agent.router import (
 )
 from apps.backend.app.integrations.generative_ai import OCIGenerativeAIService
 from apps.backend.app.services.runtime_config_service import ConfigService
-
-if TYPE_CHECKING:
-    from apps.backend.app.agent.tools.hybrid_answer_tool import HybridAnswerTool
-    from apps.backend.app.agent.tools.oracle_retrieval_tool import OracleRetrievalTool
-
 
 @dataclass(slots=True)
 class QAPlan:
@@ -103,30 +98,15 @@ class SynthesisAgent:
         )
 
 
-@dataclass(slots=True)
-class QueryExecutionResult:
-    strategy: str
-    selected_provider: str
-    evidence: list[EvidenceItem]
-    answer: LLMResult
-    answer_mode: str
-    visual_confirmation_used: bool
-    analyzed_pages: list[int]
-    confidence_notes: list[str]
-    ocr_vs_visual_discrepancies: list[str]
-    thread_id: str = ""
-    telemetry: dict[str, object] = field(default_factory=dict)
-
-
 class QueryRouterOrSupervisor:
     def __init__(
         self,
         *,
         supervisor: SupervisorAgent,
-        retrieval_tool: OracleRetrievalTool,
+        retrieval_tool: Any,
         analysis_agent: AnalysisAgent,
         answer_agent: SynthesisAgent,
-        hybrid_answer_tool: HybridAnswerTool,
+        hybrid_answer_tool: Any,
         oci_provider: OCIGenerativeAIService | None = None,
         intent_router: GraphIntentRouter | None = None,
         casual_responder: GraphSearchResponder | None = None,

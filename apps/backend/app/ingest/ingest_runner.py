@@ -9,9 +9,9 @@ from threading import Lock, Thread
 import time
 import uuid
 
-from apps.backend.app.api.contracts.files import FileProcessItem
+from apps.backend.app.contracts.files import FileProcessItem
 from apps.backend.app.core.session import get_db_manager
-from apps.backend.app.ingest.document_ingest_service import get_ingestion_service
+from apps.backend.app.ingest.ingestion_factory import get_ingestion_service
 from apps.backend.app.repositories.file_repository import FileRepository
 from apps.backend.app.services.runtime_config_service import ConfigService
 
