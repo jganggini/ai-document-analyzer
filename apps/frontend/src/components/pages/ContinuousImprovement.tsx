@@ -4,24 +4,19 @@ import { Layout } from '../common/Layout';
 import { LoadingState } from '../common/LoadingState';
 import { useToast } from '../../context/ToastContext';
 import { useAuth } from '../../context/AuthContext';
-import {
-  type ImprovementEvalCase,
-  type ImprovementEvalRun,
-  type ImprovementTraceRun,
-} from '../../services/apiTypes';
+import { type ImprovementEvalCase } from '../../services/apiTypes';
 import { improvementApi } from '../../services/improvementApi';
 import { CreateEvalCaseModal } from './improvement/CreateEvalCaseModal';
 import { ImprovementCheckpointsTab } from './improvement/ImprovementCheckpointsTab';
+import { ImprovementEvalsTab } from './improvement/ImprovementEvalsTab';
 import { ImprovementFeedbackTab } from './improvement/ImprovementFeedbackTab';
-import { MetricTile, StatusPill } from './improvement/ImprovementBadges';
+import { ImprovementTracesTab } from './improvement/ImprovementTracesTab';
+import { MetricTile } from './improvement/ImprovementBadges';
 import {
   CHECKPOINTS_PAGE_SIZE,
   DEFAULT_EVAL_CATEGORY,
   EVAL_CASES_PAGE_SIZE,
   IMPROVEMENT_TABS,
-  compactJson,
-  formatDateTime,
-  formatEvalCategory,
   formatPercent,
   parseTerms,
   type ImprovementTab,
@@ -275,262 +270,37 @@ export function ContinuousImprovement() {
           </div>
 
           {activeTab === 'traces' ? (
-            <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1.1fr)_minmax(440px,0.9fr)]">
-              <div className="flex min-w-0 min-h-0 flex-col border-r border-oracle-border">
-                <div className="app-scrollbar min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
-                  <table className="min-w-full table-fixed text-left text-sm">
-                    <thead className="sticky top-0 z-10 bg-gray-50 text-xs uppercase tracking-wide text-oracle-light-gray">
-                      <tr>
-                        <th className="w-44 px-4 py-3">Time</th>
-                        <th className="px-4 py-3">Question</th>
-                        <th className="w-[160px] px-4 py-3">Route</th>
-                        <th className="w-[118px] px-4 py-3">Status</th>
-                        <th className="w-[88px] px-4 py-3">Cites</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {traces.map((trace: ImprovementTraceRun) => (
-                        <tr
-                          key={trace.trace_id}
-                          className={`cursor-pointer transition hover:bg-gray-50 ${
-                            selectedTraceId === trace.trace_id ? 'bg-amber-50/70' : ''
-                          }`}
-                          onClick={() => setSelectedTraceId(trace.trace_id)}
-                        >
-                          <td className="whitespace-nowrap px-4 py-3 text-xs text-oracle-medium-gray">{formatDateTime(trace.started_at)}</td>
-                          <td className="px-4 py-3">
-                            <p className="line-clamp-2 font-medium text-oracle-dark-gray">{trace.question}</p>
-                            <p className="mt-1 truncate text-xs text-oracle-light-gray">{trace.thread_id}</p>
-                          </td>
-                          <td className="px-4 py-3 text-xs font-medium text-oracle-medium-gray">
-                            {trace.answerability_route || 'unclassified'}
-                          </td>
-                          <td className="px-4 py-3"><StatusPill value={trace.status} /></td>
-                          <td className="px-4 py-3 text-sm font-semibold text-oracle-dark-gray">{trace.cited_sources_count}</td>
-                        </tr>
-                      ))}
-                      {traces.length === 0 ? (
-                        <tr>
-                          <td colSpan={5} className="px-4 py-10 text-center text-sm text-oracle-light-gray">
-                            No trace runs recorded yet.
-                          </td>
-                        </tr>
-                      ) : null}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-              <div className="flex min-w-0 min-h-0 flex-col">
-                <div className="shrink-0 border-b border-oracle-border px-4 py-3">
-                  <p className="text-sm font-semibold text-oracle-dark-gray">
-                    {selectedTrace ? selectedTrace.question : 'Trace detail'}
-                  </p>
-                  {selectedTrace ? (
-                    <p className="mt-1 text-xs text-oracle-light-gray">
-                      {selectedTrace.trace_id} - {selectedTrace.answerability_route || 'unclassified'}
-                    </p>
-                  ) : null}
-                </div>
-                <div className="app-scrollbar min-h-0 flex-1 overflow-auto p-4">
-                  {!selectedTraceId ? (
-                    <div className="rounded-lg border border-dashed border-gray-300 px-4 py-10 text-center text-sm text-oracle-light-gray">
-                      Select a trace to inspect graph steps.
-                    </div>
-                  ) : traceStepsQuery.isLoading ? (
-                    <LoadingState className="py-8" size="sm" label="Loading trace steps..." textClassName="text-oracle-light-gray" />
-                  ) : (
-                    <div className="space-y-3">
-                      {(traceStepsQuery.data?.data.items || []).map((step) => (
-                        <details key={step.step_id} className="rounded-lg border border-gray-200 bg-white px-3 py-2">
-                          <summary className="flex cursor-pointer list-none items-center justify-between gap-3">
-                            <span className="min-w-0 truncate text-sm font-semibold text-oracle-dark-gray">
-                              {step.node || step.status}
-                            </span>
-                            <span className="shrink-0 text-xs text-oracle-light-gray">{step.duration_ms || 0} ms</span>
-                          </summary>
-                          <pre className="app-scrollbar mt-2 max-h-72 overflow-auto rounded bg-gray-50 p-3 text-[11px] leading-5 text-oracle-medium-gray">
-                            {compactJson({ payload: step.payload, state_patch: step.state_patch, error: step.error })}
-                          </pre>
-                        </details>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
+            <ImprovementTracesTab
+              traces={traces}
+              selectedTrace={selectedTrace}
+              selectedTraceId={selectedTraceId}
+              traceSteps={traceStepsQuery.data?.data.items || []}
+              loadingTraceSteps={traceStepsQuery.isLoading}
+              onSelectTrace={setSelectedTraceId}
+            />
           ) : null}
 
           {activeTab === 'evals' ? (
-            <div className="flex min-h-0 flex-1 flex-col">
-              <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-oracle-border px-4 py-3">
-                <div>
-                  <p className="text-sm font-semibold text-oracle-dark-gray">Evaluation cases</p>
-                  <p className="text-xs text-oracle-light-gray">{selectedCaseIds.length} selected</p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    className="btn-primary"
-                    onClick={() => setShowCreateCaseModal(true)}
-                  >
-                    + Eval
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    disabled={selectedCaseIds.length === 0 || runEvalMutation.isPending}
-                    onClick={() => runEvalMutation.mutate()}
-                  >
-                    {runEvalMutation.isPending ? 'Running...' : 'Run selected'}
-                  </button>
-                </div>
-              </div>
-              <div className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[minmax(0,1fr)_470px]">
-                  <div className="flex min-h-0 min-w-0 flex-col">
-                    <div className="app-scrollbar min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
-                    <table className="min-w-full text-left text-sm">
-                      <thead className="sticky top-0 bg-gray-50 text-xs uppercase tracking-wide text-oracle-light-gray">
-                        <tr>
-                          <th className="w-12 px-4 py-3"></th>
-                          <th className="px-4 py-3">Case</th>
-                          <th className="w-32 px-4 py-3">Category</th>
-                          <th className="w-32 px-4 py-3">Source</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-100">
-                        {paginatedEvalCases.map((evalCase) => (
-                          <tr key={evalCase.eval_case_id} className="hover:bg-gray-50">
-                            <td className="px-4 py-3">
-                              <input
-                                type="checkbox"
-                                aria-label={`Select ${evalCase.name}`}
-                                checked={selectedCaseIds.includes(evalCase.eval_case_id)}
-                                onChange={() => toggleCase(evalCase)}
-                                className="h-4 w-4 rounded border-gray-300 text-oracle-red accent-oracle-red focus:ring-oracle-red"
-                              />
-                            </td>
-                            <td className="px-4 py-3">
-                              <p className="font-medium text-oracle-dark-gray">{evalCase.name}</p>
-                              <p className="mt-1 line-clamp-2 text-xs text-oracle-medium-gray">{evalCase.question}</p>
-                            </td>
-                            <td className="px-4 py-3 text-xs text-oracle-medium-gray">
-                              {formatEvalCategory(evalCase.category)}
-                            </td>
-                            <td className="px-4 py-3 text-xs text-oracle-medium-gray">{evalCase.source}</td>
-                          </tr>
-                        ))}
-                        {evalCases.length === 0 ? (
-                          <tr>
-                            <td colSpan={4} className="px-4 py-10 text-center text-sm text-oracle-light-gray">
-                              No evaluation cases recorded yet.
-                            </td>
-                          </tr>
-                        ) : null}
-                      </tbody>
-                    </table>
-                    </div>
-                    {evalCases.length > 0 ? (
-                      <div className="flex shrink-0 items-center justify-between border-t border-gray-200 px-4 py-3">
-                        <p className="text-sm text-gray-600">
-                          Showing {evalCasesStartIndex + 1}-{evalCasesEndIndex} of {evalCases.length}
-                        </p>
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => setEvalCasesPage((page) => Math.max(1, page - 1))}
-                            disabled={safeEvalCasesPage <= 1}
-                            className="rounded border border-gray-300 bg-white px-3 py-1 text-sm text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            Previous
-                          </button>
-                          <span className="text-sm text-gray-600">
-                            Page {safeEvalCasesPage} of {evalCasesTotalPages}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => setEvalCasesPage((page) => Math.min(evalCasesTotalPages, page + 1))}
-                            disabled={safeEvalCasesPage >= evalCasesTotalPages}
-                            className="rounded border border-gray-300 bg-white px-3 py-1 text-sm text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            Next
-                          </button>
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-                  <div className="flex min-w-0 min-h-0 flex-col border-l border-oracle-border">
-                    <div className="shrink-0 border-b border-oracle-border bg-gray-50 px-4 py-3">
-                      <p className="text-sm font-semibold text-oracle-dark-gray">Recent runs</p>
-                      <p className="text-xs text-oracle-light-gray">Select a run to inspect results and traces.</p>
-                    </div>
-                    <div className="app-scrollbar max-h-[250px] shrink-0 divide-y divide-gray-100 overflow-auto">
-                      {evalRuns.map((run: ImprovementEvalRun) => (
-                        <button
-                          key={run.eval_run_id}
-                          type="button"
-                          className={`block w-full px-4 py-3 text-left transition hover:bg-gray-50 ${
-                            selectedEvalRunId === run.eval_run_id ? 'bg-amber-50/70' : ''
-                          }`}
-                          onClick={() => setSelectedEvalRunId(run.eval_run_id)}
-                        >
-                          <div className="flex items-center justify-between gap-3">
-                            <p className="truncate text-sm font-medium text-oracle-dark-gray">{run.name}</p>
-                            <StatusPill value={run.status} />
-                          </div>
-                          <p className="mt-1 text-xs text-oracle-light-gray">
-                            {run.result_count} results - score {formatPercent(run.avg_score || 0)}
-                          </p>
-                        </button>
-                      ))}
-                      {evalRuns.length === 0 ? (
-                        <div className="px-4 py-8 text-sm text-oracle-light-gray">No evaluation runs recorded yet.</div>
-                      ) : null}
-                    </div>
-                    <div className="shrink-0 border-t border-oracle-border px-4 py-3">
-                      <p className="text-sm font-semibold text-oracle-dark-gray">Results</p>
-                      <p className="text-xs text-oracle-light-gray">
-                        {selectedEvalRunId ? `Run #${selectedEvalRunId}` : 'No run selected'}
-                      </p>
-                    </div>
-                    <div className="app-scrollbar min-h-0 flex-1 space-y-2 overflow-auto px-4 pb-4">
-                      {!selectedEvalRunId ? (
-                        <div className="rounded-lg border border-dashed border-gray-300 px-3 py-6 text-center text-sm text-oracle-light-gray">
-                          Select a run to audit its answers.
-                        </div>
-                      ) : evalResultsQuery.isLoading ? (
-                        <LoadingState className="py-6" size="sm" label="Loading eval results..." textClassName="text-oracle-light-gray" />
-                      ) : (
-                        evalResults.map((result) => (
-                          <div key={result.eval_result_id} className="rounded-lg border border-gray-200 bg-white px-3 py-2">
-                            <div className="flex items-center justify-between gap-3">
-                              <p className="min-w-0 truncate text-sm font-semibold text-oracle-dark-gray">{result.case_name}</p>
-                              <StatusPill value={result.status} />
-                            </div>
-                            <p className="mt-1 line-clamp-2 text-xs text-oracle-medium-gray">{result.question}</p>
-                            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-oracle-light-gray">
-                              <span>Score {formatPercent(result.score || 0)}</span>
-                              {result.trace_id ? (
-                                <button
-                                  type="button"
-                                  className="font-semibold text-oracle-red hover:underline"
-                                  onClick={() => openTraceFromEval(result.trace_id)}
-                                >
-                                  View trace
-                                </button>
-                              ) : null}
-                            </div>
-                          </div>
-                        ))
-                      )}
-                      {selectedEvalRunId && !evalResultsQuery.isLoading && evalResults.length === 0 ? (
-                        <div className="rounded-lg border border-dashed border-gray-300 px-3 py-6 text-center text-sm text-oracle-light-gray">
-                          This run has no recorded results.
-                        </div>
-                      ) : null}
-                    </div>
-                  </div>
-                </div>
-            </div>
+            <ImprovementEvalsTab
+              evalCases={evalCases}
+              paginatedEvalCases={paginatedEvalCases}
+              selectedCaseIds={selectedCaseIds}
+              startIndex={evalCasesStartIndex}
+              endIndex={evalCasesEndIndex}
+              currentPage={safeEvalCasesPage}
+              totalPages={evalCasesTotalPages}
+              runPending={runEvalMutation.isPending}
+              evalRuns={evalRuns}
+              selectedEvalRunId={selectedEvalRunId}
+              evalResults={evalResults}
+              evalResultsLoading={evalResultsQuery.isLoading}
+              onToggleCase={toggleCase}
+              onOpenCreateCase={() => setShowCreateCaseModal(true)}
+              onRunSelected={() => runEvalMutation.mutate()}
+              onPageChange={setEvalCasesPage}
+              onSelectRun={setSelectedEvalRunId}
+              onOpenTrace={openTraceFromEval}
+            />
           ) : null}
 
           {activeTab === 'feedback' ? (
