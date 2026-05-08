@@ -8,9 +8,10 @@ import { Footer } from './Footer';
 interface LayoutProps {
   children: ReactNode;
   contentContainerClassName?: string;
+  mainMarginBottom?: string;
 }
 
-export function Layout({ children, contentContainerClassName }: LayoutProps) {
+export function Layout({ children, contentContainerClassName, mainMarginBottom = '34px' }: LayoutProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => sessionStorage.getItem('sidebarCollapsed') === 'true'
   );
@@ -32,7 +33,7 @@ export function Layout({ children, contentContainerClassName }: LayoutProps) {
           className={`flex-1 transition-all duration-300 ${
             sidebarCollapsed ? 'ml-16' : 'ml-52'
           }`}
-          style={{ marginBottom: '34px' }}
+          style={{ marginBottom: mainMarginBottom }}
         >
           <div className={contentContainerClassName ?? 'max-w-7xl mx-auto px-6 py-8'}>{children}</div>
         </main>

@@ -1,10 +1,8 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Header } from '../common/Header';
+import { Layout } from '../common/Layout';
 import { LoadingState } from '../common/LoadingState';
-import { Sidebar } from '../common/Sidebar';
-import { Footer } from '../common/Footer';
 import { ConfirmDeleteModal } from '../common/ConfirmDeleteModal';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/apiClient';
@@ -14,12 +12,6 @@ export function Users() {
   const navigate = useNavigate();
   const { user: authUser } = useAuth();
   const queryClient = useQueryClient();
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => sessionStorage.getItem('sidebarCollapsed') === 'true');
-  const handleSidebarToggle = () => setSidebarCollapsed((prev) => {
-    const next = !prev;
-    sessionStorage.setItem('sidebarCollapsed', next ? 'true' : 'false');
-    return next;
-  });
   const [searchTerm, setSearchTerm] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize] = useState(10);
@@ -153,20 +145,8 @@ export function Users() {
   };
 
   return (
-    <div className="app-shell-dark min-h-screen flex flex-col">
-      <Header />
-      
-      <div className="app-content-layer flex flex-1 pt-14">
-        <Sidebar collapsed={sidebarCollapsed} onToggle={handleSidebarToggle} />
-        
-        {/* Main Content */}
-        <div
-          className={`flex-1 transition-all duration-300 ${
-            sidebarCollapsed ? 'ml-16' : 'ml-52'
-          }`}
-          style={{ marginBottom: '50px' }}
-        >
-          <div className="max-w-7xl mx-auto px-6 py-8">
+    <>
+      <Layout contentContainerClassName="max-w-7xl mx-auto px-6 py-8" mainMarginBottom="50px">
             <div className="flex items-start justify-between gap-4 mb-4">
               <div>
                 <h1 className="text-3xl font-bold text-gray-900 mb-2">Users</h1>
@@ -335,9 +315,7 @@ export function Users() {
                 </>
               )}
             </div>
-          </div>
-        </div>
-      </div>
+      </Layout>
 
       {/* Create User Modal */}
       {showCreateModal && (
@@ -466,8 +444,6 @@ export function Users() {
           }}
         />
       ) : null}
-      
-      <Footer />
-    </div>
+    </>
   );
 }

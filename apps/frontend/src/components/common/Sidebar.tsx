@@ -6,7 +6,6 @@ import { useRAGChat } from '../../context/RAGChatContext';
 import { sortChatConversationsByUpdatedAt } from '../../lib/chatSorting';
 import { queryKeys } from '../../lib/queryClient';
 import { chatApi } from '../../services/chatApi';
-import type { ChatConversationSummary } from '../../services/apiTypes';
 
 interface SidebarProps {
   collapsed: boolean;
@@ -28,6 +27,13 @@ type ActionMenuItem = {
 };
 
 type MenuItem = RouteMenuItem | ActionMenuItem;
+
+type SidebarChatSummary = {
+  conversation_id: number;
+  title: string;
+  created_at: string;
+  updated_at: string;
+};
 
 function parseChatTimestamp(value: string): Date | null {
   const rawValue = String(value || '').trim();
@@ -209,7 +215,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     queryFn: async () => {
       const response = await chatApi.listConversations();
       return sortChatConversationsByUpdatedAt(
-        (response.data?.items || []) as ChatConversationSummary[]
+        (response.data?.items || []) as SidebarChatSummary[]
       );
     },
     enabled: isAuthenticated && !collapsed,

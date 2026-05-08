@@ -1,19 +1,9 @@
 import { useState, useEffect } from 'react';
-import { Header } from '../common/Header';
+import { Layout } from '../common/Layout';
 import { LoadingState } from '../common/LoadingState';
-import { Sidebar } from '../common/Sidebar';
-import { Footer } from '../common/Footer';
-import { useAuth } from '../../context/AuthContext';
 import api from '../../services/apiClient';
 
 export function Profile() {
-  useAuth();
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => sessionStorage.getItem('sidebarCollapsed') === 'true');
-  const handleSidebarToggle = () => setSidebarCollapsed((prev) => {
-    const next = !prev;
-    sessionStorage.setItem('sidebarCollapsed', next ? 'true' : 'false');
-    return next;
-  });
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -129,20 +119,7 @@ export function Profile() {
   }
 
   return (
-    <div className="app-shell-dark min-h-screen flex flex-col">
-      <Header />
-      
-      <div className="app-content-layer flex flex-1 pt-14">
-        <Sidebar collapsed={sidebarCollapsed} onToggle={handleSidebarToggle} />
-        
-        {/* Main Content */}
-        <div
-          className={`flex-1 transition-all duration-300 ${
-            sidebarCollapsed ? 'ml-16' : 'ml-52'
-          }`}
-          style={{ marginBottom: '50px' }}
-        >
-          <div className="max-w-4xl mx-auto px-6 py-8">
+    <Layout contentContainerClassName="max-w-4xl mx-auto px-6 py-8" mainMarginBottom="50px">
             <h1 className="text-3xl font-bold text-gray-900 mb-6">Edit Profile</h1>
             
             {/* Profile Section */}
@@ -305,11 +282,6 @@ export function Profile() {
                 {saving ? 'Changing...' : 'Change Password'}
               </button>
             </div>
-          </div>
-        </div>
-      </div>
-
-      <Footer />
-    </div>
+    </Layout>
   );
 }
